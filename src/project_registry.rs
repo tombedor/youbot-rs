@@ -48,7 +48,7 @@ impl ProjectRegistry {
         path: impl Into<PathBuf>,
         auto_merge: bool,
     ) -> Result<ProjectRecord> {
-        let path = path.into();
+        let path = normalize_repo_path(path.into())?;
         if !path.exists() {
             return Err(anyhow!("repo path does not exist: {}", path.display()));
         }
@@ -94,33 +94,11 @@ impl ProjectRegistry {
     fn commit_state_repo(&self, message: &str) -> Result<()> {
         let git_dir = self.state_root.join(".git");
         if !git_dir.exists() {
-            let status = Command::new("git")
-                .arg("init")
-                .current_dir(&self.state_root)
-                .status()
-                .with_context(|| format!("failed to initialize git repo in {}", self.state_root.display()))?;
-            if !status.success() {
-                return Err(anyhow!("git init failed for {}", self.state_root.display()));
-            }
+            run_git(&self.state_root, ["init"])?;
         }
 
-        let add_status = Command::new("git")
-            .args(["add", "."])
-            .current_dir(&self.state_root)
-            .status()
-            .with_context(|| format!("failed to git add in {}", self.state_root.display()))?;
-        if !add_status.success() {
-            return Err(anyhow!("git add failed in {}", self.state_root.display()));
-        }
-
-        let commit_status = Command::new("git")
-            .args(["commit", "-m", message, "--allow-empty"])
-            .current_dir(&self.state_root)
-            .status()
-            .with_context(|| format!("failed to git commit in {}", self.state_root.display()))?;
-        if !commit_status.success() {
-            return Err(anyhow!("git commit failed in {}", self.state_root.display()));
-        }
+        run_git(&self.state_root, ["add", "."])?;
+        run_git(&self.state_root, ["commit", "-m", message, "--allow-empty"])?;
         Ok(())
     }
 }
@@ -135,14 +113,7 @@ fn ensure_git_repo(path: &Path) -> Result<()> {
     if path.join(".git").exists() {
         return Ok(());
     }
-    let status = Command::new("git")
-        .arg("init")
-        .current_dir(path)
-        .status()
-        .with_context(|| format!("failed to initialize git repo in {}", path.display()))?;
-    if !status.success() {
-        return Err(anyhow!("git init failed in {}", path.display()));
-    }
+    run_git(path, ["init"])?;
     Ok(())
 }
 
@@ -159,4 +130,53 @@ fn write_gitignore(path: &Path, programming_language: &str) -> Result<()> {
     fs::write(path.join(".gitignore"), body)
         .with_context(|| format!("failed to write {}", path.join(".gitignore").display()))?;
     Ok(())
+}
+
+fn normalize_repo_path(path: PathBuf) -> Result<PathBuf> {
+    let raw = path.to_string_lossy();
+    if raw == "~" || raw.starts_with("~/") {
+        let home = dirs::home_dir().ok_or_else(|| anyhow!("failed to determine home directory"))?;
+        let suffix = raw.strip_prefix("~/").unwrap_or("");
+        return Ok(home.join(suffix));
+    }
+    Ok(path)
+}
+
+fn run_git<const N: usize>(cwd: &Path, args: [&str; N]) -> Result<()> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .with_context(|| format!("failed to run git {:?} in {}", args, cwd.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let details = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        "git command failed with no output".to_string()
+    };
+    Err(anyhow!(
+        "git {:?} failed in {}: {}",
+        args,
+        cwd.display(),
+        details
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_repo_path;
+
+    #[test]
+    fn expands_tilde_paths() {
+        let path = normalize_repo_path("~/development/example".into()).unwrap();
+        assert!(path.is_absolute());
+        assert!(path.to_string_lossy().contains("/development/example"));
+    }
 }

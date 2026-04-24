@@ -171,6 +171,7 @@ pub struct AddRepoForm {
     pub repo_path: String,
     pub create_new_repo: bool,
     pub programming_language: String,
+    pub create_location_policy: usize,
     pub remote_mode: usize,
     pub dont_ask_again: bool,
 }

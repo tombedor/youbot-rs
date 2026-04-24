@@ -11,8 +11,20 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Result<Option<String>> {
         KeyCode::Backspace => {
             app.add_repo_form.repo_path.pop();
         }
-        KeyCode::Char('r') => app.add_repo_form.remote_mode = (app.add_repo_form.remote_mode + 1) % 3,
-        KeyCode::Char('d') => app.add_repo_form.dont_ask_again = !app.add_repo_form.dont_ask_again,
+        KeyCode::Char('r') if app.add_repo_form.create_new_repo => {
+            app.add_repo_form.remote_mode = (app.add_repo_form.remote_mode + 1) % 3
+        }
+        KeyCode::Char('d') if app.add_repo_form.create_new_repo => {
+            app.add_repo_form.dont_ask_again = !app.add_repo_form.dont_ask_again
+        }
+        KeyCode::Char('w') if app.add_repo_form.create_new_repo => {
+            app.add_repo_form.create_location_policy =
+                (app.add_repo_form.create_location_policy + 1) % 3
+        }
+        KeyCode::Char('l') if app.add_repo_form.create_new_repo => {
+            app.add_repo_form.programming_language =
+                next_language(&app.add_repo_form.programming_language).to_string();
+        }
         KeyCode::Char(ch) => app.add_repo_form.repo_path.push(ch),
         KeyCode::Enter => {
             if app.add_repo_form.repo_path.trim().is_empty() {
@@ -44,4 +56,14 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Result<Option<String>> {
         _ => {}
     }
     Ok(None)
+}
+
+fn next_language(current: &str) -> &'static str {
+    match current.to_ascii_lowercase().as_str() {
+        "" => "rust",
+        "rust" => "python",
+        "python" => "typescript",
+        "typescript" => "none",
+        _ => "rust",
+    }
 }
