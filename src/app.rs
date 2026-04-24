@@ -21,6 +21,8 @@ pub struct App {
     pub selected_project: usize,
     pub selected_task: usize,
     pub add_repo_form: AddRepoForm,
+    pub creating_task: bool,
+    pub task_draft: String,
     pub status: String,
     pub should_quit: bool,
     pub sessions: Vec<SessionRecord>,
@@ -60,6 +62,8 @@ impl App {
             selected_project,
             selected_task: 0,
             add_repo_form: AddRepoForm::default(),
+            creating_task: false,
+            task_draft: String::new(),
             status: "Ready".to_string(),
             should_quit: false,
             sessions,
@@ -117,8 +121,22 @@ impl App {
             .ok_or_else(|| anyhow!("no project selected"))?;
         self.task_repository.create_task(&project, title)?;
         self.reload_tasks()?;
+        self.creating_task = false;
+        self.task_draft.clear();
         self.status = "Task created".to_string();
         Ok(())
+    }
+
+    pub fn begin_task_creation(&mut self) {
+        self.creating_task = true;
+        self.task_draft.clear();
+        self.status = "Enter a task title and press Enter".to_string();
+    }
+
+    pub fn cancel_task_creation(&mut self) {
+        self.creating_task = false;
+        self.task_draft.clear();
+        self.status = "Task creation cancelled".to_string();
     }
 
     pub fn cycle_task_status(&mut self) -> Result<()> {

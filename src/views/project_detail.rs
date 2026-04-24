@@ -6,7 +6,12 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(8), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(8),
+            Constraint::Length(4),
+            Constraint::Length(2),
+        ])
         .split(area);
 
     let title = app
@@ -39,8 +44,23 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
         List::new(items).block(Block::default().borders(Borders::ALL).title("TODO")),
         chunks[1],
     );
+
+    let task_input = if app.creating_task {
+        format!(
+            "New task title: {}\nEnter saves, Esc cancels",
+            app.task_draft
+        )
+    } else {
+        "Press 'n' to create a task.".to_string()
+    };
+    frame.render_widget(
+        Paragraph::new(task_input)
+            .block(Block::default().borders(Borders::ALL).title("Task Input")),
+        chunks[2],
+    );
+
     frame.render_widget(
         Paragraph::new(app.status.as_str()).block(Block::default().borders(Borders::TOP)),
-        chunks[2],
+        chunks[3],
     );
 }
