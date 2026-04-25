@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::models::Route;
+use crate::models::{CodingAgentProduct, Route, SessionKind};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -11,11 +11,11 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Result<Option<String>> {
                 app.task_draft.pop();
             }
             KeyCode::Enter => {
-                let title = app.task_draft.trim().to_string();
-                if title.is_empty() {
-                    app.status = "Task title cannot be empty".to_string();
+                let description = app.task_draft.trim().to_string();
+                if description.is_empty() {
+                    app.status = "Task description cannot be empty".to_string();
                 } else {
-                    app.create_task(title)?;
+                    app.create_task(description)?;
                 }
             }
             KeyCode::Char(ch) => app.task_draft.push(ch),
@@ -51,6 +51,9 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Result<Option<String>> {
         KeyCode::Char('s') => {
             app.cycle_task_status()?;
         }
+        KeyCode::Char('a') => {
+            return app.attach_existing_session(CodingAgentProduct::Codex, SessionKind::Background);
+        }
         _ => {}
     }
     Ok(None)
@@ -76,7 +79,7 @@ mod tests {
         let mut app = test_app();
         handle(&mut app, key_char('n')).unwrap();
         assert!(app.creating_task);
-        assert_eq!(app.status, "Enter a task title and press Enter");
+        assert_eq!(app.status, "Enter a task description and press Enter");
     }
 
     #[test]
@@ -90,6 +93,7 @@ mod tests {
 
         assert!(!app.creating_task);
         assert_eq!(app.tasks.len(), 1);
+        assert_eq!(app.tasks[0].description, "Implement task input");
         assert_eq!(app.tasks[0].title, "Implement task input");
     }
 
@@ -103,14 +107,16 @@ mod tests {
             monitor_silence_seconds: 120,
         };
         let project_registry = ProjectRegistry::new(state_root.clone());
-        let task_repository = TaskRepository::new(state_root.clone());
+        let task_repository = TaskRepository::new(state_root.clone(), project_registry.clone());
+        let supervisor = CodingAgentSupervisor::new(task_repository.clone());
         let session_manager = SessionManager::new(
             state_root.clone(),
             120,
             TmuxClient::new("youbot-test"),
-            CodingAgentSupervisor::new(task_repository.clone()),
+            supervisor.clone(),
             Notifier,
             task_repository.clone(),
+            project_registry.clone(),
         );
 
         let project = ProjectRecord {
@@ -135,6 +141,7 @@ mod tests {
             status: "Ready".to_string(),
             should_quit: false,
             sessions: Vec::new(),
+            supervisor,
             project_registry,
             task_repository,
             session_manager,

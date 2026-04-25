@@ -9,8 +9,11 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
         app.status
     );
     frame.render_widget(
-        Paragraph::new(body)
-            .block(Block::default().borders(Borders::ALL).title("Live Coding Session")),
+        Paragraph::new(body).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Live Coding Session"),
+        ),
         area,
     );
 }

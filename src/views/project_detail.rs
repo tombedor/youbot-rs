@@ -23,7 +23,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .title("Project Detail")
-                .title_bottom("n new task  s change status  Enter task  Esc home"),
+                .title_bottom(
+                    "n new task  s change status  a attach bg codex  Enter task  Esc home",
+                ),
         ),
         chunks[0],
     );
@@ -36,7 +38,12 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
             .enumerate()
             .map(|(index, task)| {
                 let marker = if index == app.selected_task { ">" } else { " " };
-                ListItem::new(format!("{marker} {} [{}]", task.title, task.status.label()))
+                ListItem::new(format!(
+                    "{marker} {} [{}]\n  {}",
+                    task.title,
+                    task.status.label(),
+                    task.description
+                ))
             })
             .collect()
     };
@@ -47,7 +54,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let task_input = if app.creating_task {
         format!(
-            "New task title: {}\nEnter saves, Esc cancels",
+            "New task description: {}\nEnter saves, Esc cancels",
             app.task_draft
         )
     } else {

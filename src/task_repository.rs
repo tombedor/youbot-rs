@@ -1,7 +1,8 @@
 use crate::models::{
-    AgentSessionRef, CaptainLogEntry, CodingAgentProduct, ProjectRecord, SessionSummary, TaskRecord,
-    TaskStatus,
+    AgentSessionRef, CaptainLogEntry, CodingAgentProduct, ProjectRecord, SessionSummary,
+    TaskRecord, TaskStatus,
 };
+use crate::project_registry::ProjectRegistry;
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -16,29 +17,39 @@ const TODO_MARKER_END: &str = " -->";
 #[derive(Debug, Clone)]
 pub struct TaskRepository {
     state_root: PathBuf,
+    project_registry: ProjectRegistry,
 }
 
 impl TaskRepository {
-    pub fn new(state_root: impl Into<PathBuf>) -> Self {
+    pub fn new(state_root: impl Into<PathBuf>, project_registry: ProjectRegistry) -> Self {
         Self {
             state_root: state_root.into(),
+            project_registry,
         }
     }
 
     pub fn load_tasks(&self, project: &ProjectRecord) -> Result<Vec<TaskRecord>> {
         let path = self.todo_path(project);
         if !path.exists() {
-            self.write_tasks(project, &[])?;
             return Ok(Vec::new());
         }
-        parse_todo_markdown(&fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?)
+        parse_todo_markdown(
+            &fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?,
+        )
     }
 
-    pub fn create_task(&self, project: &ProjectRecord, title: impl Into<String>) -> Result<TaskRecord> {
+    pub fn create_task(
+        &self,
+        project: &ProjectRecord,
+        title: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Result<TaskRecord> {
         let mut tasks = self.load_tasks(project)?;
         let task = TaskRecord {
             id: Uuid::new_v4().to_string(),
             title: title.into(),
+            description: description.into(),
             status: TaskStatus::Todo,
             sessions: Vec::new(),
         };
@@ -135,7 +146,10 @@ impl TaskRepository {
         if !path.exists() {
             return Ok(Vec::new());
         }
-        parse_captains_log(&fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?)
+        parse_captains_log(
+            &fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?,
+        )
     }
 
     pub fn write_tasks(&self, project: &ProjectRecord, tasks: &[TaskRecord]) -> Result<()> {
@@ -145,6 +159,8 @@ impl TaskRepository {
         let path = self.todo_path(project);
         fs::write(&path, render_todo_markdown(tasks))
             .with_context(|| format!("failed to write {}", path.display()))?;
+        self.project_registry
+            .commit_state_snapshot("Update task state")?;
         Ok(())
     }
 
@@ -154,6 +170,8 @@ impl TaskRepository {
         let path = self.captains_log_path(project);
         fs::write(&path, render_captains_log(&entries))
             .with_context(|| format!("failed to write {}", path.display()))?;
+        self.project_registry
+            .commit_state_snapshot("Update captain's log")?;
         Ok(())
     }
 
@@ -186,6 +204,7 @@ pub fn render_todo_markdown(tasks: &[TaskRecord]) -> String {
     for task in tasks {
         body.push_str(&format!("## {} [{}]\n", task.title, task.status.label()));
         body.push_str(&format!("- id: `{}`\n", task.id));
+        body.push_str(&format!("- description: {}\n", task.description));
         if task.sessions.is_empty() {
             body.push_str("- sessions: none\n\n");
             continue;
@@ -281,6 +300,7 @@ mod tests {
         let tasks = vec![TaskRecord {
             id: "task-1".to_string(),
             title: "Implement tmux integration".to_string(),
+            description: "Track tmux background sessions and summarize them.".to_string(),
             status: TaskStatus::InProgress,
             sessions: vec![AgentSessionRef {
                 product: CodingAgentProduct::Codex,
@@ -302,6 +322,7 @@ mod tests {
         let parsed = parse_todo_markdown(&body).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].title, tasks[0].title);
+        assert_eq!(parsed[0].description, tasks[0].description);
         assert_eq!(parsed[0].sessions.len(), 1);
     }
 

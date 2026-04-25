@@ -26,6 +26,7 @@ pub struct App {
     pub status: String,
     pub should_quit: bool,
     pub sessions: Vec<SessionRecord>,
+    pub supervisor: CodingAgentSupervisor,
     pub project_registry: ProjectRegistry,
     pub task_repository: TaskRepository,
     pub session_manager: SessionManager,
@@ -35,15 +36,17 @@ impl App {
     pub fn load() -> Result<Self> {
         let config = config::load_or_create()?;
         let project_registry = ProjectRegistry::new(config.state_root.clone());
-        let task_repository = TaskRepository::new(config.state_root.clone());
+        let task_repository =
+            TaskRepository::new(config.state_root.clone(), project_registry.clone());
         let supervisor = CodingAgentSupervisor::new(task_repository.clone());
         let session_manager = SessionManager::new(
             config.state_root.clone(),
             config.monitor_silence_seconds,
             TmuxClient::new(config.tmux_socket_name.clone()),
-            supervisor,
+            supervisor.clone(),
             Notifier,
             task_repository.clone(),
+            project_registry.clone(),
         );
         let projects = project_registry.load()?;
         let selected_project = 0;
@@ -67,6 +70,7 @@ impl App {
             status: "Ready".to_string(),
             should_quit: false,
             sessions,
+            supervisor,
             project_registry,
             task_repository,
             session_manager,
@@ -75,7 +79,10 @@ impl App {
 
     pub fn refresh(&mut self) -> Result<()> {
         self.projects = self.project_registry.load()?;
-        self.sessions = self.session_manager.poll(&self.projects).unwrap_or_default();
+        self.sessions = self
+            .session_manager
+            .poll(&self.projects)
+            .unwrap_or_default();
         self.reload_tasks()
     }
 
@@ -114,23 +121,26 @@ impl App {
         Ok(())
     }
 
-    pub fn create_task(&mut self, title: impl Into<String>) -> Result<()> {
+    pub fn create_task(&mut self, description: impl Into<String>) -> Result<()> {
         let project = self
             .selected_project()
             .cloned()
             .ok_or_else(|| anyhow!("no project selected"))?;
-        self.task_repository.create_task(&project, title)?;
+        let description = description.into();
+        let title = self.supervisor.classify_task_title(&description);
+        self.task_repository
+            .create_task(&project, title.clone(), description)?;
         self.reload_tasks()?;
         self.creating_task = false;
         self.task_draft.clear();
-        self.status = "Task created".to_string();
+        self.status = format!("Task created: {title}");
         Ok(())
     }
 
     pub fn begin_task_creation(&mut self) {
         self.creating_task = true;
         self.task_draft.clear();
-        self.status = "Enter a task title and press Enter".to_string();
+        self.status = "Enter a task description and press Enter".to_string();
     }
 
     pub fn cancel_task_creation(&mut self) {
@@ -154,7 +164,8 @@ impl App {
             TaskStatus::Complete => TaskStatus::WontDo,
             TaskStatus::WontDo => TaskStatus::Todo,
         };
-        self.task_repository.update_status(&project, &task.id, next)?;
+        self.task_repository
+            .update_status(&project, &task.id, next)?;
         self.reload_tasks()?;
         self.status = "Task status updated".to_string();
         Ok(())
@@ -181,5 +192,28 @@ impl App {
         self.route = Route::LiveSession;
         self.status = format!("Session {}", session.session_id);
         Ok(session.tmux_session_name)
+    }
+
+    pub fn attach_existing_session(
+        &mut self,
+        product: CodingAgentProduct,
+        kind: SessionKind,
+    ) -> Result<Option<String>> {
+        let task = self
+            .selected_task()
+            .cloned()
+            .ok_or_else(|| anyhow!("no task selected"))?;
+        let session = task
+            .sessions
+            .into_iter()
+            .find(|session| session.product == product && session.session_kind == kind);
+        if let Some(session) = session {
+            self.route = Route::LiveSession;
+            self.status = format!("Session {}", session.session_id);
+            Ok(Some(session.tmux_session_name))
+        } else {
+            self.status = format!("No {} {} session to attach", product.label(), kind.label());
+            Ok(None)
+        }
     }
 }

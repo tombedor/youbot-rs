@@ -38,9 +38,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 &app.add_repo_form.programming_language
             }
         ));
-        lines.push(format!(
-            "Create location policy: {location_policy}"
-        ));
+        lines.push(format!("Create location policy: {location_policy}"));
         lines.push(format!("Remote: {remote}"));
         lines.push(format!(
             "Do not ask again: {}",
@@ -59,8 +57,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let body = lines.join("\n");
     frame.render_widget(
-        Paragraph::new(body)
-            .block(Block::default().borders(Borders::ALL).title("Add Repo")),
+        Paragraph::new(body).block(Block::default().borders(Borders::ALL).title("Add Repo")),
         area,
     );
 }

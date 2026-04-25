@@ -14,6 +14,9 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Result<Option<String>> {
             app.start_session(CodingAgentProduct::Codex, SessionKind::Background)?;
             app.route = Route::ProjectDetail;
         }
+        KeyCode::Char('a') => {
+            return app.attach_existing_session(CodingAgentProduct::Codex, SessionKind::Background);
+        }
         KeyCode::Char('c') => {
             let session_name =
                 app.start_session(CodingAgentProduct::ClaudeCode, SessionKind::Live)?;

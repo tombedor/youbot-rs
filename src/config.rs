@@ -28,8 +28,12 @@ pub fn load_or_create() -> Result<AppConfig> {
 
     fs::create_dir_all(&config.managed_repo_root)
         .with_context(|| format!("failed to create {}", config.managed_repo_root.display()))?;
-    fs::create_dir_all(config.state_root.join("projects"))
-        .with_context(|| format!("failed to create {}", config.state_root.join("projects").display()))?;
+    fs::create_dir_all(config.state_root.join("projects")).with_context(|| {
+        format!(
+            "failed to create {}",
+            config.state_root.join("projects").display()
+        )
+    })?;
     Ok(config)
 }
 

@@ -4,6 +4,7 @@ use crate::models::{
     TaskRecord,
 };
 use crate::notifier::Notifier;
+use crate::project_registry::ProjectRegistry;
 use crate::task_repository::TaskRepository;
 use crate::tmux_client::TmuxClient;
 use anyhow::{Context, Result, anyhow};
@@ -20,6 +21,7 @@ pub struct SessionManager {
     supervisor: CodingAgentSupervisor,
     notifier: Notifier,
     task_repository: TaskRepository,
+    project_registry: ProjectRegistry,
 }
 
 impl SessionManager {
@@ -30,6 +32,7 @@ impl SessionManager {
         supervisor: CodingAgentSupervisor,
         notifier: Notifier,
         task_repository: TaskRepository,
+        project_registry: ProjectRegistry,
     ) -> Self {
         Self {
             state_root: state_root.into(),
@@ -38,6 +41,7 @@ impl SessionManager {
             supervisor,
             notifier,
             task_repository,
+            project_registry,
         }
     }
 
@@ -46,9 +50,10 @@ impl SessionManager {
         if !path.exists() {
             return Ok(Vec::new());
         }
-        let raw =
-            fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
-        Ok(serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))?)
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        Ok(serde_json::from_str(&raw)
+            .with_context(|| format!("failed to parse {}", path.display()))?)
     }
 
     pub fn start_session(
@@ -70,11 +75,7 @@ impl SessionManager {
         }
 
         let session_id = Uuid::new_v4().to_string();
-        let tmux_session_name = format!(
-            "youbot-{}-{}",
-            short_id(&project.id),
-            short_id(&task.id)
-        );
+        let tmux_session_name = format!("youbot-{}-{}", short_id(&project.id), short_id(&task.id));
         let command = match product {
             CodingAgentProduct::Codex => "codex",
             CodingAgentProduct::ClaudeCode => "claude",
@@ -123,6 +124,61 @@ impl SessionManager {
         self.tmux.attach(&session.tmux_session_name)
     }
 
+    pub fn finalize_attached_session(
+        &self,
+        projects: &[ProjectRecord],
+        session_name: &str,
+    ) -> Result<Option<String>> {
+        let mut sessions = self.load_sessions()?;
+        let Some(record) = sessions
+            .iter_mut()
+            .find(|record| record.session.tmux_session_name == session_name)
+        else {
+            return Ok(None);
+        };
+
+        let project = projects
+            .iter()
+            .find(|project| project.id == record.project_id)
+            .ok_or_else(|| anyhow!("unknown project {}", record.project_id))?;
+        let tasks = self.task_repository.load_tasks(project)?;
+        let task = tasks
+            .iter()
+            .find(|task| task.id == record.task_id)
+            .ok_or_else(|| anyhow!("unknown task {}", record.task_id))?;
+
+        let session_exists = self.tmux.session_exists(session_name);
+        let transcript = if session_exists {
+            self.tmux.capture_pane(session_name).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let session_id = record.session.session_id.clone();
+        let product = record.session.product.clone();
+        let status = self.supervisor.evaluate_live_session(
+            project,
+            task,
+            product,
+            &session_id,
+            &transcript,
+        )?;
+        record.session.state = if session_exists {
+            SessionState::Active
+        } else {
+            SessionState::Exited
+        };
+        record.session.updated_at = Utc::now();
+        self.task_repository
+            .upsert_session(project, &record.task_id, record.session.clone())?;
+        self.save_sessions(&sessions)?;
+
+        Ok(Some(format!(
+            "Reviewed session {} and set task to {}",
+            session_id,
+            status.label()
+        )))
+    }
+
     pub fn poll(&self, projects: &[ProjectRecord]) -> Result<Vec<SessionRecord>> {
         let mut sessions = self.load_sessions()?;
         for record in &mut sessions {
@@ -155,11 +211,16 @@ impl SessionManager {
             )?;
             record.session.state = state.clone();
             record.session.updated_at = Utc::now();
-            self.task_repository
-                .upsert_session(project, &record.task_id, record.session.clone())?;
+            self.task_repository.upsert_session(
+                project,
+                &record.task_id,
+                record.session.clone(),
+            )?;
 
             if let Some(prompt) = self.supervisor.prompt_for_completion(&transcript) {
-                let _ = self.tmux.send_keys(&record.session.tmux_session_name, &prompt);
+                let _ = self
+                    .tmux
+                    .send_keys(&record.session.tmux_session_name, &prompt);
             }
 
             if matches!(state, SessionState::Completed | SessionState::Stuck) {
@@ -181,6 +242,8 @@ impl SessionManager {
         }
         fs::write(&path, serde_json::to_string_pretty(sessions)?)
             .with_context(|| format!("failed to write {}", path.display()))?;
+        self.project_registry
+            .commit_state_snapshot("Update session state")?;
         Ok(())
     }
 

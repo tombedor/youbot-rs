@@ -6,7 +6,12 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(4), Constraint::Min(8), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(6),
+            Constraint::Length(5),
+            Constraint::Min(8),
+            Constraint::Length(2),
+        ])
         .split(area);
 
     let header = app
@@ -18,9 +23,21 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .title("Task View")
-                .title_bottom("l live codex  b background codex  c live claude  Esc back"),
+                .title_bottom(
+                    "l live codex  b background codex  a attach bg codex  c live claude  Esc back",
+                ),
         ),
         chunks[0],
+    );
+
+    let description = app
+        .selected_task()
+        .map(|task| task.description.as_str())
+        .unwrap_or("No task selected.");
+    frame.render_widget(
+        Paragraph::new(description)
+            .block(Block::default().borders(Borders::ALL).title("Description")),
+        chunks[1],
     );
 
     let items: Vec<ListItem<'_>> = app
@@ -52,10 +69,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     frame.render_widget(
         List::new(items).block(Block::default().borders(Borders::ALL).title("Sessions")),
-        chunks[1],
+        chunks[2],
     );
     frame.render_widget(
         Paragraph::new(app.status.as_str()).block(Block::default().borders(Borders::TOP)),
-        chunks[2],
+        chunks[3],
     );
 }

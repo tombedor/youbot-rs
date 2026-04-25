@@ -27,8 +27,8 @@ impl ProjectRegistry {
         if !path.exists() {
             return Ok(Vec::new());
         }
-        let raw =
-            fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
         let projects = serde_json::from_str(&raw)
             .with_context(|| format!("failed to parse {}", path.display()))?;
         Ok(projects)
@@ -40,7 +40,7 @@ impl ProjectRegistry {
         let body = serde_json::to_string_pretty(projects)?;
         let path = self.registry_path();
         fs::write(&path, body).with_context(|| format!("failed to write {}", path.display()))?;
-        self.commit_state_repo("Update project registry")
+        self.commit_state_snapshot("Update project registry")
     }
 
     pub fn add_existing_repo(
@@ -91,14 +91,14 @@ impl ProjectRegistry {
         self.save(&projects)
     }
 
-    fn commit_state_repo(&self, message: &str) -> Result<()> {
+    pub fn commit_state_snapshot(&self, message: &str) -> Result<()> {
         let git_dir = self.state_root.join(".git");
         if !git_dir.exists() {
             run_git(&self.state_root, ["init"])?;
         }
 
         run_git(&self.state_root, ["add", "."])?;
-        run_git(&self.state_root, ["commit", "-m", message, "--allow-empty"])?;
+        run_git_commit(&self.state_root, message)?;
         Ok(())
     }
 }
@@ -164,6 +164,41 @@ fn run_git<const N: usize>(cwd: &Path, args: [&str; N]) -> Result<()> {
     Err(anyhow!(
         "git {:?} failed in {}: {}",
         args,
+        cwd.display(),
+        details
+    ))
+}
+
+fn run_git_commit(cwd: &Path, message: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args([
+            "-c",
+            "user.name=youbot",
+            "-c",
+            "user.email=youbot@local",
+            "commit",
+            "-m",
+            message,
+            "--allow-empty",
+        ])
+        .current_dir(cwd)
+        .output()
+        .with_context(|| format!("failed to run git commit in {}", cwd.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let details = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        "git commit failed with no output".to_string()
+    };
+    Err(anyhow!(
+        "git commit failed in {}: {}",
         cwd.display(),
         details
     ))

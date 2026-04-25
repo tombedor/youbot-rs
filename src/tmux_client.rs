@@ -55,7 +55,13 @@ impl TmuxClient {
 
     pub fn attach(&self, session_name: &str) -> Result<()> {
         let status = Command::new("tmux")
-            .args(["-L", &self.socket_name, "attach-session", "-t", session_name])
+            .args([
+                "-L",
+                &self.socket_name,
+                "attach-session",
+                "-t",
+                session_name,
+            ])
             .status()
             .with_context(|| format!("failed to attach to tmux session {session_name}"))?;
         if !status.success() {
@@ -66,7 +72,13 @@ impl TmuxClient {
 
     pub fn list_sessions(&self) -> Result<Vec<String>> {
         let output = Command::new("tmux")
-            .args(["-L", &self.socket_name, "list-sessions", "-F", "#{session_name}"])
+            .args([
+                "-L",
+                &self.socket_name,
+                "list-sessions",
+                "-F",
+                "#{session_name}",
+            ])
             .output()
             .with_context(|| "failed to list tmux sessions")?;
         if !output.status.success() {

@@ -44,8 +44,16 @@ fn run_loop(mut terminal: DefaultTerminal, app: &mut App) -> anyhow::Result<()> 
             if let Err(error) = attach_result {
                 app.status = format!("Failed to attach: {error:#}");
             } else {
+                if let Ok(Some(status)) = app
+                    .session_manager
+                    .finalize_attached_session(&app.projects, &session_name)
+                {
+                    app.status = status;
+                } else {
+                    app.status = "Returned from live session".to_string();
+                }
+                let _ = app.refresh();
                 app.route = Route::Home;
-                app.status = "Returned from live session".to_string();
             }
         }
     }

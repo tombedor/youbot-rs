@@ -143,6 +143,8 @@ pub struct AgentSessionRef {
 pub struct TaskRecord {
     pub id: String,
     pub title: String,
+    #[serde(default)]
+    pub description: String,
     pub status: TaskStatus,
     #[serde(default)]
     pub sessions: Vec<AgentSessionRef>,

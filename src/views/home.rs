@@ -7,7 +7,11 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(6), Constraint::Length(2)])
+        .constraints([
+            Constraint::Min(8),
+            Constraint::Length(6),
+            Constraint::Length(2),
+        ])
         .split(area);
 
     let items: Vec<ListItem<'_>> = if app.projects.is_empty() {
@@ -17,8 +21,16 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
             .iter()
             .enumerate()
             .map(|(index, project)| {
-                let marker = if index == app.selected_project { ">" } else { " " };
-                ListItem::new(format!("{marker} {} ({})", project.name, project.path.display()))
+                let marker = if index == app.selected_project {
+                    ">"
+                } else {
+                    " "
+                };
+                ListItem::new(format!(
+                    "{marker} {} ({})",
+                    project.name,
+                    project.path.display()
+                ))
             })
             .collect()
     };
