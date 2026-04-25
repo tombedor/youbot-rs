@@ -273,3 +273,227 @@ fn new_add_repo_form(config: &AppConfig) -> AddRepoForm {
         ..AddRepoForm::default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{
+        AgentSessionRef, ProjectConfig, ProjectRecord, SessionState, TaskRecord,
+    };
+    use crate::notifier::NotifySink;
+    use crate::tmux_client::TmuxOps;
+    use anyhow::Result;
+    use chrono::{Duration, Utc};
+    use std::path::Path;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    #[test]
+    fn latest_session_prefers_most_recent_for_selected_project() {
+        let mut app = test_app();
+        let project_id = app.projects[0].id.clone();
+        app.sessions = vec![
+            session_record(&project_id, "task-1", "older", SessionKind::Background, SessionState::Active, Utc::now()),
+            session_record(
+                &project_id,
+                "task-2",
+                "newer",
+                SessionKind::Live,
+                SessionState::Completed,
+                Utc::now() + Duration::seconds(5),
+            ),
+        ];
+
+        let latest = app.latest_session_for_selected_project().unwrap();
+
+        assert_eq!(latest.task_title, "newer");
+    }
+
+    #[test]
+    fn attach_selected_project_background_session_skips_exited_sessions() {
+        let mut app = test_app();
+        let project_id = app.projects[0].id.clone();
+        app.sessions = vec![
+            session_record(
+                &project_id,
+                "task-1",
+                "exited",
+                SessionKind::Background,
+                SessionState::Exited,
+                Utc::now(),
+            ),
+            session_record(
+                &project_id,
+                "task-2",
+                "active",
+                SessionKind::Background,
+                SessionState::Active,
+                Utc::now() + Duration::seconds(5),
+            ),
+        ];
+
+        let session_name = app.attach_selected_project_background_session().unwrap();
+
+        assert_eq!(session_name, "tmux-task-2");
+        assert_eq!(app.route, Route::LiveSession);
+    }
+
+    #[test]
+    fn attach_existing_session_returns_none_when_missing() {
+        let mut app = test_app();
+        app.tasks = vec![TaskRecord {
+            id: "task-1".to_string(),
+            title: "Task".to_string(),
+            description: "desc".to_string(),
+            status: TaskStatus::Todo,
+            sessions: Vec::new(),
+        }];
+
+        let result = app
+            .attach_existing_session(CodingAgentProduct::Codex, SessionKind::Background)
+            .unwrap();
+
+        assert!(result.is_none());
+        assert!(app.status.contains("No codex background session"));
+    }
+
+    #[test]
+    fn reload_tasks_clamps_selection_to_last_task() {
+        let mut app = test_app();
+        let project = app.projects[0].clone();
+        app.task_repository
+            .create_task(&project, "One", "first")
+            .unwrap();
+        app.task_repository
+            .create_task(&project, "Two", "second")
+            .unwrap();
+        app.reload_tasks().unwrap();
+        app.selected_task = 5;
+
+        app.task_repository
+            .update_status(&project, &app.tasks[1].id, TaskStatus::Complete)
+            .unwrap();
+        app.reload_tasks().unwrap();
+
+        assert_eq!(app.selected_task, 1);
+    }
+
+    fn test_app() -> App {
+        let temp = tempdir().unwrap();
+        let state_root = temp.path().join(".youbot");
+        let config = AppConfig {
+            state_root: state_root.clone(),
+            managed_repo_root: temp.path().join("managed"),
+            tmux_socket_name: "youbot-test".to_string(),
+            monitor_silence_seconds: 120,
+        };
+        let project_registry = ProjectRegistry::new(state_root.clone());
+        let task_repository = TaskRepository::new(state_root.clone(), project_registry.clone());
+        let supervisor = CodingAgentSupervisor::new(task_repository.clone());
+        let session_manager = SessionManager::with_handles(
+            state_root.clone(),
+            120,
+            Arc::new(NoopTmux),
+            supervisor.clone(),
+            Arc::new(NoopNotifier),
+            task_repository.clone(),
+            project_registry.clone(),
+        );
+        let project = ProjectRecord {
+            id: "project-1".to_string(),
+            name: "example".to_string(),
+            path: temp.path().join("repo"),
+            created_at: Utc::now(),
+            config: ProjectConfig::default(),
+        };
+        std::fs::create_dir_all(&project.path).unwrap();
+        project_registry.save(std::slice::from_ref(&project)).unwrap();
+
+        App {
+            config: config.clone(),
+            route: Route::Home,
+            projects: vec![project],
+            tasks: Vec::new(),
+            selected_project: 0,
+            selected_task: 0,
+            add_repo_form: new_add_repo_form(&config),
+            creating_task: false,
+            task_draft: String::new(),
+            status: "Ready".to_string(),
+            should_quit: false,
+            sessions: Vec::new(),
+            supervisor,
+            project_registry,
+            task_repository,
+            session_manager,
+        }
+    }
+
+    fn session_record(
+        project_id: &str,
+        task_id: &str,
+        task_title: &str,
+        session_kind: SessionKind,
+        state: SessionState,
+        updated_at: chrono::DateTime<Utc>,
+    ) -> SessionRecord {
+        SessionRecord {
+            project_id: project_id.to_string(),
+            task_id: task_id.to_string(),
+            task_title: task_title.to_string(),
+            session: AgentSessionRef {
+                product: CodingAgentProduct::Codex,
+                session_kind,
+                tmux_session_name: format!("tmux-{task_id}"),
+                session_id: format!("session-{task_id}"),
+                state,
+                branch_name: None,
+                last_summary: None,
+                created_at: updated_at,
+                updated_at,
+            },
+        }
+    }
+
+    struct NoopTmux;
+
+    impl TmuxOps for NoopTmux {
+        fn session_exists(&self, _session_name: &str) -> bool {
+            false
+        }
+
+        fn create_session(
+            &self,
+            _session_name: &str,
+            _cwd: &Path,
+            _command: &str,
+            _detached: bool,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn attach(&self, _session_name: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn capture_pane(&self, _session_name: &str) -> Result<String> {
+            Ok(String::new())
+        }
+
+        fn send_keys(&self, _session_name: &str, _input: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn enable_monitor_silence(&self, _session_name: &str, _seconds: u64) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct NoopNotifier;
+
+    impl NotifySink for NoopNotifier {
+        fn notify(&self, _title: &str, _body: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+}

@@ -45,3 +45,29 @@ pub fn save(config: &AppConfig) -> Result<()> {
     fs::write(&path, body).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{config_path, save};
+    use crate::models::AppConfig;
+    use tempfile::tempdir;
+
+    #[test]
+    fn save_writes_json_config_at_expected_path() {
+        let temp = tempdir().unwrap();
+        let config = AppConfig {
+            state_root: temp.path().join(".youbot"),
+            managed_repo_root: temp.path().join("managed"),
+            tmux_socket_name: "socket".to_string(),
+            monitor_silence_seconds: 30,
+        };
+
+        save(&config).unwrap();
+
+        let path = config_path(&config.state_root);
+        assert!(path.exists());
+        let body = std::fs::read_to_string(path).unwrap();
+        assert!(body.contains("\"tmux_socket_name\": \"socket\""));
+        assert!(body.contains("\"monitor_silence_seconds\": 30"));
+    }
+}

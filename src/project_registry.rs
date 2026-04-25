@@ -239,12 +239,50 @@ fn run_git_commit(cwd: &Path, message: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_repo_path;
+    use super::{normalize_repo_path, ProjectRegistry};
+    use tempfile::tempdir;
 
     #[test]
     fn expands_tilde_paths() {
         let path = normalize_repo_path("~/development/example".into()).unwrap();
         assert!(path.is_absolute());
         assert!(path.to_string_lossy().contains("/development/example"));
+    }
+
+    #[test]
+    fn create_new_repo_initializes_gitignore_and_project_record() {
+        let temp = tempdir().unwrap();
+        let state_root = temp.path().join(".youbot");
+        let registry = ProjectRegistry::new(state_root);
+        let managed_root = temp.path().join("managed");
+
+        let project = registry
+            .create_new_repo(&managed_root, "demo", "rust", true, 2)
+            .unwrap();
+
+        assert_eq!(project.name, "demo");
+        assert!(project.path.join(".git").exists());
+        assert_eq!(
+            std::fs::read_to_string(project.path.join(".gitignore")).unwrap(),
+            "target/\nCargo.lock\n"
+        );
+        let loaded = registry.load().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded[0].config.auto_merge);
+    }
+
+    #[test]
+    fn update_project_config_persists_new_merge_mode() {
+        let temp = tempdir().unwrap();
+        let state_root = temp.path().join(".youbot");
+        let registry = ProjectRegistry::new(state_root);
+        let repo_path = temp.path().join("repo");
+        std::fs::create_dir_all(&repo_path).unwrap();
+        let project = registry.add_existing_repo(&repo_path, false).unwrap();
+
+        registry.update_project_config(&project.id, true).unwrap();
+
+        let loaded = registry.load().unwrap();
+        assert!(loaded[0].config.auto_merge);
     }
 }
