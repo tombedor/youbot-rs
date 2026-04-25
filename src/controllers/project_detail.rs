@@ -51,6 +51,9 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Result<Option<String>> {
         KeyCode::Char('s') => {
             app.cycle_task_status()?;
         }
+        KeyCode::Char('m') => {
+            app.toggle_selected_project_auto_merge()?;
+        }
         KeyCode::Char('a') => {
             return app.attach_existing_session(CodingAgentProduct::Codex, SessionKind::Background);
         }

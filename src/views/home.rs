@@ -9,7 +9,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(8),
-            Constraint::Length(6),
+            Constraint::Length(8),
             Constraint::Length(2),
         ])
         .split(area);
@@ -38,29 +38,54 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Block::default()
             .title("Home")
             .borders(Borders::ALL)
-            .title_bottom("Enter project  a add repo  r refresh  q quit"),
+            .title_bottom("Enter project  b attach bg  a add repo  r refresh  q quit"),
     );
     frame.render_widget(list, chunks[0]);
 
-    let session_rows: Vec<ListItem<'_>> = if app.sessions.is_empty() {
-        vec![ListItem::new("No active background sessions.")]
+    let latest = app
+        .latest_session_for_selected_project()
+        .map(|record| {
+            format!(
+                "Last session: {} :: {} {} [{}]",
+                record.task_title,
+                record.session.product.label(),
+                record.session.session_kind.label(),
+                record.session.state.label()
+            )
+        })
+        .unwrap_or_else(|| "Last session: none".to_string());
+    let background_rows: Vec<String> = app
+        .selected_project()
+        .map(|project| {
+            app.sessions
+                .iter()
+                .filter(|record| {
+                    record.project_id == project.id
+                        && record.session.session_kind.label() == "background"
+                        && record.session.state.label() != "exited"
+                })
+                .map(|record| {
+                    format!(
+                        "{} :: {} [{}]",
+                        record.task_title,
+                        record.session.product.label(),
+                        record.session.state.label()
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let body = if background_rows.is_empty() {
+        format!("{latest}\n\nBackground sessions: none")
     } else {
-        app.sessions
-            .iter()
-            .filter(|record| record.session.session_kind.label() == "background")
-            .map(|record| {
-                ListItem::new(format!(
-                    "{} :: {} [{}]",
-                    record.task_title,
-                    record.session.product.label(),
-                    record.session.state.label()
-                ))
-            })
-            .collect()
+        format!(
+            "{latest}\n\nBackground sessions:\n{}",
+            background_rows.join("\n")
+        )
     };
-    let sessions = List::new(session_rows).block(
+    let sessions = Paragraph::new(body).block(
         Block::default()
-            .title("Background Sessions")
+            .title("Selected Project Activity")
             .borders(Borders::ALL),
     );
     frame.render_widget(sessions, chunks[1]);

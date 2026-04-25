@@ -16,7 +16,14 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let title = app
         .selected_project()
-        .map(|project| format!("Project: {}", project.name))
+        .map(|project| {
+            let merge_mode = if project.config.auto_merge {
+                "auto-merge"
+            } else {
+                "open-pr"
+            };
+            format!("Project: {} ({merge_mode})", project.name)
+        })
         .unwrap_or_else(|| "Project".to_string());
     frame.render_widget(
         Paragraph::new(title).block(
@@ -24,7 +31,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .title("Project Detail")
                 .title_bottom(
-                    "n new task  s change status  a attach bg codex  Enter task  Esc home",
+                    "n new task  s change status  m toggle merge  a attach bg codex  Enter task  Esc home",
                 ),
         ),
         chunks[0],

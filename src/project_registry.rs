@@ -72,12 +72,16 @@ impl ProjectRegistry {
         name: &str,
         programming_language: &str,
         auto_merge: bool,
+        remote_mode: usize,
     ) -> Result<ProjectRecord> {
         let repo_path = root.join(name);
         fs::create_dir_all(&repo_path)
             .with_context(|| format!("failed to create {}", repo_path.display()))?;
         ensure_git_repo(&repo_path)?;
         write_gitignore(&repo_path, programming_language)?;
+        if remote_mode < 2 {
+            create_github_remote(&repo_path, name, remote_mode == 0)?;
+        }
         self.add_existing_repo(repo_path, auto_merge)
     }
 
@@ -130,6 +134,35 @@ fn write_gitignore(path: &Path, programming_language: &str) -> Result<()> {
     fs::write(path.join(".gitignore"), body)
         .with_context(|| format!("failed to write {}", path.join(".gitignore").display()))?;
     Ok(())
+}
+
+fn create_github_remote(path: &Path, name: &str, public: bool) -> Result<()> {
+    let visibility = if public { "--public" } else { "--private" };
+    let output = Command::new("gh")
+        .args([
+            "repo", "create", name, visibility, "--source", ".", "--remote", "origin",
+        ])
+        .current_dir(path)
+        .output()
+        .with_context(|| format!("failed to run gh repo create in {}", path.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let details = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        "gh repo create failed with no output".to_string()
+    };
+    Err(anyhow!(
+        "failed to create GitHub remote for {}: {}",
+        path.display(),
+        details
+    ))
 }
 
 fn normalize_repo_path(path: PathBuf) -> Result<PathBuf> {

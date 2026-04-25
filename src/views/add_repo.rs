@@ -1,4 +1,5 @@
 use crate::app::App;
+use crate::models::AddRepoField;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -14,9 +15,22 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         "Existing repo path"
     };
+    let repo_marker = if app.add_repo_form.active_field == AddRepoField::RepoInput {
+        ">"
+    } else {
+        " "
+    };
+    let location_marker = if app.add_repo_form.active_field == AddRepoField::LocationInput {
+        ">"
+    } else {
+        " "
+    };
     let mut lines = vec![
         format!("Mode: {mode}"),
-        format!("{field_label}: {}", app.add_repo_form.repo_path),
+        format!(
+            "{repo_marker} {field_label}: {}",
+            app.add_repo_form.repo_input
+        ),
     ];
 
     if app.add_repo_form.create_new_repo {
@@ -32,26 +46,38 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
         };
         lines.push(format!(
             "Programming language: {}",
-            if app.add_repo_form.programming_language.is_empty() {
-                "rust"
-            } else {
-                &app.add_repo_form.programming_language
-            }
+            &app.add_repo_form.programming_language
         ));
         lines.push(format!("Create location policy: {location_policy}"));
         lines.push(format!("Remote: {remote}"));
         lines.push(format!(
-            "Do not ask again: {}",
-            app.add_repo_form.dont_ask_again
+            "{location_marker} Create location: {}",
+            app.add_repo_form.location_input
+        ));
+        lines.push(format!(
+            "Merge mode: {}",
+            if app.add_repo_form.auto_merge {
+                "auto-merge"
+            } else {
+                "open-pr"
+            }
         ));
         lines.push(String::new());
         lines.push(
-            "Type a repo name. Tab toggles mode, l cycles language, w cycles location policy, r cycles remote, d toggles do-not-ask-again, Enter saves, Esc cancels.".to_string(),
+            "Type into the selected field. m toggles mode, Tab switches fields, l cycles language, w cycles location policy, r cycles remote, p toggles merge mode, Enter saves, Esc cancels.".to_string(),
         );
     } else {
+        lines.push(format!(
+            "Merge mode: {}",
+            if app.add_repo_form.auto_merge {
+                "auto-merge"
+            } else {
+                "open-pr"
+            }
+        ));
         lines.push(String::new());
         lines.push(
-            "Type an existing repo path. Tab toggles mode, Enter saves, Esc cancels.".to_string(),
+            "Type an existing repo path. m toggles mode, p toggles merge mode, Enter saves, Esc cancels.".to_string(),
         );
     }
 

@@ -1,5 +1,6 @@
 use crate::app::App;
 use crate::models::Route;
+use crate::tmux_client::TmuxOps;
 use crate::views;
 use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{DefaultTerminal, Frame};

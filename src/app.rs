@@ -2,8 +2,8 @@ use crate::coding_agent_supervisor::CodingAgentSupervisor;
 use crate::config;
 use crate::controllers;
 use crate::models::{
-    AddRepoForm, AppConfig, CodingAgentProduct, ProjectRecord, Route, SessionKind, SessionRecord,
-    TaskRecord, TaskStatus,
+    AddRepoField, AddRepoForm, AppConfig, CodingAgentProduct, ProjectRecord, Route, SessionKind,
+    SessionRecord, TaskRecord, TaskStatus,
 };
 use crate::notifier::Notifier;
 use crate::project_registry::ProjectRegistry;
@@ -57,6 +57,8 @@ impl App {
             .unwrap_or_default();
         let sessions = session_manager.load_sessions().unwrap_or_default();
 
+        let add_repo_form = new_add_repo_form(&config);
+
         Ok(Self {
             config,
             route: Route::Home,
@@ -64,7 +66,7 @@ impl App {
             tasks,
             selected_project,
             selected_task: 0,
-            add_repo_form: AddRepoForm::default(),
+            add_repo_form,
             creating_task: false,
             task_draft: String::new(),
             status: "Ready".to_string(),
@@ -109,6 +111,30 @@ impl App {
         }
     }
 
+    pub fn latest_session_for_selected_project(&self) -> Option<&SessionRecord> {
+        let project = self.selected_project()?;
+        self.sessions
+            .iter()
+            .filter(|record| record.project_id == project.id)
+            .max_by_key(|record| record.session.updated_at)
+    }
+
+    pub fn attach_selected_project_background_session(&mut self) -> Option<String> {
+        let project = self.selected_project()?;
+        let session = self
+            .sessions
+            .iter()
+            .filter(|record| {
+                record.project_id == project.id
+                    && record.session.session_kind == SessionKind::Background
+                    && !matches!(record.session.state, crate::models::SessionState::Exited)
+            })
+            .max_by_key(|record| record.session.updated_at)?;
+        self.route = Route::LiveSession;
+        self.status = format!("Session {}", session.session.session_id);
+        Some(session.session.tmux_session_name.clone())
+    }
+
     pub fn reload_tasks(&mut self) -> Result<()> {
         self.tasks = self
             .selected_project()
@@ -147,6 +173,10 @@ impl App {
         self.creating_task = false;
         self.task_draft.clear();
         self.status = "Task creation cancelled".to_string();
+    }
+
+    pub fn reset_add_repo_form(&mut self) {
+        self.add_repo_form = new_add_repo_form(&self.config);
     }
 
     pub fn cycle_task_status(&mut self) -> Result<()> {
@@ -215,5 +245,31 @@ impl App {
             self.status = format!("No {} {} session to attach", product.label(), kind.label());
             Ok(None)
         }
+    }
+
+    pub fn toggle_selected_project_auto_merge(&mut self) -> Result<()> {
+        let project = self
+            .selected_project()
+            .cloned()
+            .ok_or_else(|| anyhow!("no project selected"))?;
+        let next = !project.config.auto_merge;
+        self.project_registry
+            .update_project_config(&project.id, next)?;
+        self.projects = self.project_registry.load()?;
+        self.status = if next {
+            "Project set to auto-merge".to_string()
+        } else {
+            "Project set to open PRs".to_string()
+        };
+        Ok(())
+    }
+}
+
+fn new_add_repo_form(config: &AppConfig) -> AddRepoForm {
+    AddRepoForm {
+        location_input: config.managed_repo_root.display().to_string(),
+        programming_language: "rust".to_string(),
+        active_field: AddRepoField::RepoInput,
+        ..AddRepoForm::default()
     }
 }

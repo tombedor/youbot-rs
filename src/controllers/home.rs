@@ -26,7 +26,16 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Result<Option<String>> {
                 app.route = Route::ProjectDetail;
             }
         }
-        KeyCode::Char('a') => app.route = Route::AddRepo,
+        KeyCode::Char('b') => {
+            if let Some(session_name) = app.attach_selected_project_background_session() {
+                return Ok(Some(session_name));
+            }
+            app.status = "No active background session for selected project".to_string();
+        }
+        KeyCode::Char('a') => {
+            app.reset_add_repo_form();
+            app.route = Route::AddRepo;
+        }
         KeyCode::Char('r') => {
             app.refresh()?;
             app.status = "Refreshed".to_string();

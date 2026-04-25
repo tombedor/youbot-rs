@@ -151,3 +151,157 @@ fn infer_task_status(transcript: &str) -> Option<TaskStatus> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::CodingAgentSupervisor;
+    use crate::models::{
+        AgentSessionRef, CodingAgentProduct, ProjectConfig, ProjectRecord, SessionKind,
+        SessionState, TaskRecord, TaskStatus,
+    };
+    use crate::project_registry::ProjectRegistry;
+    use crate::task_repository::TaskRepository;
+    use chrono::Utc;
+    use tempfile::tempdir;
+
+    #[test]
+    fn classify_task_title_trims_and_shortens_description() {
+        let (_temp, project, repo, supervisor) = test_context();
+        let _ = (project, repo); // keep setup symmetrical for future tests
+
+        let title =
+            supervisor.classify_task_title("  Implement the long-running background poller now. ");
+
+        assert_eq!(title, "Implement the long-running background poller now");
+    }
+
+    #[test]
+    fn prompt_for_completion_only_when_waiting_for_input() {
+        let (_temp, _project, _repo, supervisor) = test_context();
+
+        assert!(
+            supervisor
+                .prompt_for_completion("Agent is waiting for user input")
+                .is_some()
+        );
+        assert!(supervisor.prompt_for_completion("Still coding").is_none());
+    }
+
+    #[test]
+    fn evaluate_live_session_updates_status_and_summary() {
+        let (_temp, project, repo, supervisor) = test_context();
+        let task = create_task_with_session(
+            &repo,
+            &project,
+            "Fix failing integration workflow",
+            CodingAgentProduct::Codex,
+            SessionKind::Live,
+        );
+
+        let status = supervisor
+            .evaluate_live_session(
+                &project,
+                &task,
+                CodingAgentProduct::Codex,
+                "session-1",
+                "Investigated issue\nApplied fix\nDone",
+            )
+            .unwrap();
+
+        let stored = repo.load_tasks(&project).unwrap();
+        assert_eq!(status, TaskStatus::Complete);
+        assert_eq!(stored[0].status, TaskStatus::Complete);
+        assert_eq!(
+            stored[0].sessions[0].last_summary.as_ref().unwrap().summary,
+            "Investigated issue | Applied fix | Done"
+        );
+    }
+
+    #[test]
+    fn evaluate_background_session_marks_waiting_and_completed_states() {
+        let (_temp, project, repo, supervisor) = test_context();
+        let task = create_task_with_session(
+            &repo,
+            &project,
+            "Make background sessions autonomous",
+            CodingAgentProduct::Codex,
+            SessionKind::Background,
+        );
+
+        let waiting = supervisor
+            .evaluate_background_session(
+                &project,
+                &task,
+                CodingAgentProduct::Codex,
+                "session-1",
+                "I need your input before I can continue",
+            )
+            .unwrap();
+        let completed = supervisor
+            .evaluate_background_session(
+                &project,
+                &task,
+                CodingAgentProduct::Codex,
+                "session-1",
+                "Applied the patch\nMerged the changes\nCompleted",
+            )
+            .unwrap();
+
+        let stored = repo.load_tasks(&project).unwrap();
+        assert_eq!(waiting, SessionState::WaitingForInput);
+        assert_eq!(completed, SessionState::Completed);
+        assert_eq!(stored[0].status, TaskStatus::Complete);
+        assert!(repo.load_captains_log(&project).unwrap().len() >= 2);
+    }
+
+    fn test_context() -> (
+        tempfile::TempDir,
+        ProjectRecord,
+        TaskRepository,
+        CodingAgentSupervisor,
+    ) {
+        let temp = tempdir().unwrap();
+        let state_root = temp.path().join(".youbot");
+        let registry = ProjectRegistry::new(state_root.clone());
+        let repo = TaskRepository::new(state_root.clone(), registry);
+        let supervisor = CodingAgentSupervisor::new(repo.clone());
+        let project = ProjectRecord {
+            id: "project-1".to_string(),
+            name: "example".to_string(),
+            path: temp.path().join("repo"),
+            created_at: Utc::now(),
+            config: ProjectConfig::default(),
+        };
+        std::fs::create_dir_all(&project.path).unwrap();
+        (temp, project, repo, supervisor)
+    }
+
+    fn create_task_with_session(
+        repo: &TaskRepository,
+        project: &ProjectRecord,
+        description: &str,
+        product: CodingAgentProduct,
+        kind: SessionKind,
+    ) -> TaskRecord {
+        let task = repo
+            .create_task(project, "Task title", description)
+            .unwrap();
+        repo.upsert_session(
+            project,
+            &task.id,
+            AgentSessionRef {
+                product,
+                session_kind: kind,
+                tmux_session_name: "tmux-1".to_string(),
+                session_id: "session-1".to_string(),
+                state: SessionState::Active,
+                branch_name: None,
+                last_summary: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            },
+        )
+        .unwrap();
+        repo.load_tasks(project).unwrap().remove(0)
+    }
+}

@@ -170,12 +170,21 @@ pub struct SessionRecord {
 
 #[derive(Debug, Clone, Default)]
 pub struct AddRepoForm {
-    pub repo_path: String,
+    pub repo_input: String,
+    pub location_input: String,
     pub create_new_repo: bool,
     pub programming_language: String,
     pub create_location_policy: usize,
     pub remote_mode: usize,
-    pub dont_ask_again: bool,
+    pub auto_merge: bool,
+    pub active_field: AddRepoField,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AddRepoField {
+    #[default]
+    RepoInput,
+    LocationInput,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
