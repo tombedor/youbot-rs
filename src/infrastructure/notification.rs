@@ -1,14 +1,14 @@
 use anyhow::{Result, anyhow};
 use std::process::Command;
 
-pub trait NotifySink: Send + Sync {
+pub trait NotificationSink: Send + Sync {
     fn notify(&self, title: &str, body: &str) -> Result<()>;
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Notifier;
+pub struct SystemNotifier;
 
-impl Notifier {
+impl SystemNotifier {
     fn notify_impl(&self, title: &str, body: &str) -> Result<()> {
         if cfg!(target_os = "macos") {
             let script = format!("display notification {:?} with title {:?}", body, title);
@@ -29,7 +29,7 @@ impl Notifier {
     }
 }
 
-impl NotifySink for Notifier {
+impl NotificationSink for SystemNotifier {
     fn notify(&self, title: &str, body: &str) -> Result<()> {
         self.notify_impl(title, body)
     }

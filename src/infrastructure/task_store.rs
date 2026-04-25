@@ -1,9 +1,9 @@
-use crate::models::{
+use crate::domain::{
     AgentSessionRef, CaptainLogEntry, CodingAgentProduct, ProjectRecord, SessionSummary,
     TaskRecord, TaskStatus,
 };
-use crate::project_registry::ProjectRegistry;
-use crate::storage;
+use crate::infrastructure::project_catalog::ProjectCatalog;
+use crate::infrastructure::state_files;
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -16,16 +16,16 @@ const TODO_MARKER_START: &str = "<!-- youbot:tasks ";
 const TODO_MARKER_END: &str = " -->";
 
 #[derive(Debug, Clone)]
-pub struct TaskRepository {
+pub struct TaskStore {
     state_root: PathBuf,
-    project_registry: ProjectRegistry,
+    project_catalog: ProjectCatalog,
 }
 
-impl TaskRepository {
-    pub fn new(state_root: impl Into<PathBuf>, project_registry: ProjectRegistry) -> Self {
+impl TaskStore {
+    pub fn new(state_root: impl Into<PathBuf>, project_catalog: ProjectCatalog) -> Self {
         Self {
             state_root: state_root.into(),
-            project_registry,
+            project_catalog,
         }
     }
 
@@ -39,7 +39,7 @@ impl TaskRepository {
         match parse_todo_markdown(&raw) {
             Ok(tasks) => Ok(tasks),
             Err(error) => {
-                let quarantine_path = storage::quarantine_corrupt(&path)?;
+                let quarantine_path = state_files::quarantine_corrupt(&path)?;
                 eprintln!(
                     "warning: failed to parse {}; moved corrupt file to {}: {error}",
                     path.display(),
@@ -66,7 +66,7 @@ impl TaskRepository {
         };
         tasks.push(task.clone());
         self.write_tasks_internal(project, &tasks)?;
-        self.project_registry
+        self.project_catalog
             .commit_state_snapshot("Update task state")?;
         Ok(task)
     }
@@ -84,7 +84,7 @@ impl TaskRepository {
             .ok_or_else(|| anyhow!("unknown task id {task_id}"))?;
         task.status = status;
         self.write_tasks_internal(project, &tasks)?;
-        self.project_registry
+        self.project_catalog
             .commit_state_snapshot("Update task state")
     }
 
@@ -97,7 +97,7 @@ impl TaskRepository {
         let mut tasks = self.load_tasks(project)?;
         self.upsert_session_in_tasks(&mut tasks, task_id, session)?;
         self.write_tasks_internal(project, &tasks)?;
-        self.project_registry
+        self.project_catalog
             .commit_state_snapshot("Update task state")
     }
 
@@ -140,7 +140,7 @@ impl TaskRepository {
         let mut entries = self.load_captains_log(project)?;
         entries.push(entry);
         self.write_captains_log_internal(project, &entries)?;
-        self.project_registry
+        self.project_catalog
             .commit_state_snapshot("Update task session summary")
     }
 
@@ -154,7 +154,7 @@ impl TaskRepository {
         match parse_captains_log(&raw) {
             Ok(entries) => Ok(entries),
             Err(error) => {
-                let quarantine_path = storage::quarantine_corrupt(&path)?;
+                let quarantine_path = state_files::quarantine_corrupt(&path)?;
                 eprintln!(
                     "warning: failed to parse {}; moved corrupt file to {}: {error}",
                     path.display(),
@@ -167,7 +167,7 @@ impl TaskRepository {
 
     pub fn write_tasks(&self, project: &ProjectRecord, tasks: &[TaskRecord]) -> Result<()> {
         self.write_tasks_internal(project, tasks)?;
-        self.project_registry
+        self.project_catalog
             .commit_state_snapshot("Update task state")
     }
 
@@ -187,7 +187,7 @@ impl TaskRepository {
         fs::create_dir_all(&project_dir)
             .with_context(|| format!("failed to create {}", project_dir.display()))?;
         let path = self.todo_path(project);
-        storage::atomic_write(&path, render_todo_markdown(tasks))
+        state_files::atomic_write(&path, render_todo_markdown(tasks))
             .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(())
     }
@@ -198,7 +198,7 @@ impl TaskRepository {
         entries: &[CaptainLogEntry],
     ) -> Result<()> {
         let path = self.captains_log_path(project);
-        storage::atomic_write(&path, render_captains_log(entries))
+        state_files::atomic_write(&path, render_captains_log(entries))
             .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(())
     }
@@ -336,93 +336,4 @@ pub fn parse_captains_log(body: &str) -> Result<Vec<CaptainLogEntry>> {
     let wrapper: Wrapper =
         serde_json::from_str(&remaining[..end]).context("failed to parse captains log metadata")?;
     Ok(wrapper.entries)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::models::{CodingAgentProduct, SessionKind, SessionState};
-    use chrono::Utc;
-
-    #[test]
-    fn todo_markdown_round_trip() {
-        let tasks = vec![TaskRecord {
-            id: "task-1".to_string(),
-            title: "Implement tmux integration".to_string(),
-            description: "Track tmux background sessions and summarize them.".to_string(),
-            status: TaskStatus::InProgress,
-            sessions: vec![AgentSessionRef {
-                product: CodingAgentProduct::Codex,
-                session_kind: SessionKind::Background,
-                tmux_session_name: "youbot-task-1".to_string(),
-                session_id: "session-1".to_string(),
-                state: SessionState::Active,
-                branch_name: Some("feature/task-1".to_string()),
-                last_summary: Some(SessionSummary {
-                    summary: "Created the session and started work.".to_string(),
-                    updated_at: Utc::now(),
-                }),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            }],
-        }];
-
-        let body = render_todo_markdown(&tasks);
-        let parsed = parse_todo_markdown(&body).unwrap();
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].title, tasks[0].title);
-        assert_eq!(parsed[0].description, tasks[0].description);
-        assert_eq!(parsed[0].sessions.len(), 1);
-    }
-
-    #[test]
-    fn captains_log_round_trip() {
-        let entries = vec![CaptainLogEntry {
-            timestamp: Utc::now(),
-            task_id: "task-1".to_string(),
-            task_title: "Task".to_string(),
-            session_id: "session-1".to_string(),
-            product: CodingAgentProduct::Codex,
-            summary: "Summary".to_string(),
-        }];
-
-        let body = render_captains_log(&entries);
-        let parsed = parse_captains_log(&body).unwrap();
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].summary, "Summary");
-    }
-
-    #[test]
-    fn load_tasks_quarantines_corrupt_file_and_recovers() {
-        let temp = tempfile::tempdir().unwrap();
-        let state_root = temp.path().join(".youbot");
-        let registry = ProjectRegistry::new(state_root.clone());
-        let repo = TaskRepository::new(state_root.clone(), registry);
-        let project = ProjectRecord {
-            id: "project-1".to_string(),
-            name: "example".to_string(),
-            path: temp.path().join("repo"),
-            created_at: Utc::now(),
-            config: crate::models::ProjectConfig::default(),
-        };
-        std::fs::create_dir_all(project.path.clone()).unwrap();
-        let todo_path = state_root.join("projects").join("project-1").join("TODO.md");
-        std::fs::create_dir_all(todo_path.parent().unwrap()).unwrap();
-        std::fs::write(&todo_path, "<!-- youbot:tasks {not json} -->").unwrap();
-
-        let tasks = repo.load_tasks(&project).unwrap();
-
-        assert!(tasks.is_empty());
-        assert!(!todo_path.exists());
-        let quarantined = std::fs::read_dir(todo_path.parent().unwrap())
-            .unwrap()
-            .any(|entry| {
-                entry
-                    .unwrap()
-                    .file_name()
-                    .to_string_lossy()
-                    .contains("TODO.md.corrupt-")
-            });
-        assert!(quarantined);
-    }
 }

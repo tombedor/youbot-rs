@@ -22,8 +22,7 @@ pub fn atomic_write(path: &Path, body: impl AsRef<[u8]>) -> Result<()> {
             .with_context(|| format!("failed to sync {}", tmp_path.display()))?;
     }
 
-    fs::rename(&tmp_path, path)
-        .with_context(|| format!("failed to replace {}", path.display()))?;
+    fs::rename(&tmp_path, path).with_context(|| format!("failed to replace {}", path.display()))?;
     sync_parent_dir(path)?;
     Ok(())
 }

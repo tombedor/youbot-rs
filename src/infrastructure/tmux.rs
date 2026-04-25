@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use std::path::Path;
 use std::process::Command;
 
-pub trait TmuxOps: Send + Sync {
+pub trait TerminalSessionOps: Send + Sync {
     fn session_exists(&self, session_name: &str) -> bool;
     fn create_session(
         &self,
@@ -18,11 +18,11 @@ pub trait TmuxOps: Send + Sync {
 }
 
 #[derive(Debug, Clone)]
-pub struct TmuxClient {
+pub struct TmuxTerminal {
     socket_name: String,
 }
 
-impl TmuxClient {
+impl TmuxTerminal {
     pub fn new(socket_name: impl Into<String>) -> Self {
         Self {
             socket_name: socket_name.into(),
@@ -167,7 +167,7 @@ impl TmuxClient {
     }
 }
 
-impl TmuxOps for TmuxClient {
+impl TerminalSessionOps for TmuxTerminal {
     fn session_exists(&self, session_name: &str) -> bool {
         self.session_exists_impl(session_name)
     }

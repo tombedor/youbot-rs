@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::models::AddRepoStep;
+use crate::ui::state::AddRepoStep;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -103,9 +103,5 @@ fn remote_label(value: usize) -> &'static str {
 }
 
 fn merge_mode_label(auto_merge: bool) -> &'static str {
-    if auto_merge {
-        "auto-merge"
-    } else {
-        "open-pr"
-    }
+    if auto_merge { "auto-merge" } else { "open-pr" }
 }

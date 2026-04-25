@@ -16,7 +16,11 @@ fn pty_smoke_starts_and_quits_cleanly() {
     let transcript = run_in_pty_steps(&home, &[(b"q".as_slice(), 0)]);
 
     let config_path = home.join(".youbot").join("config.json");
-    assert!(config_path.exists(), "expected config at {}", config_path.display());
+    assert!(
+        config_path.exists(),
+        "expected config at {}",
+        config_path.display()
+    );
     assert!(
         transcript.contains("\u{1b}[?1049h"),
         "transcript was:\n{transcript}"
@@ -99,12 +103,7 @@ fn run_in_pty_steps(home: &Path, steps: &[(&[u8], u64)]) -> String {
         .spawn()
         .unwrap();
 
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .flush()
-        .unwrap();
+    child.stdin.as_mut().unwrap().flush().unwrap();
     for (bytes, delay_ms) in steps {
         if let Err(error) = write_step(child.stdin.as_mut().unwrap(), bytes) {
             if error.kind() != ErrorKind::BrokenPipe {
