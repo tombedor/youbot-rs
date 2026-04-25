@@ -6,6 +6,7 @@ pub mod models;
 pub mod notifier;
 pub mod project_registry;
 pub mod session_manager;
+pub mod storage;
 pub mod task_repository;
 pub mod tmux_client;
 pub mod tui;

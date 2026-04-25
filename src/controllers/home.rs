@@ -51,7 +51,7 @@ mod tests {
     use crate::app::App;
     use crate::coding_agent_supervisor::CodingAgentSupervisor;
     use crate::models::{
-        AddRepoField, AddRepoForm, AppConfig, AgentSessionRef, ProjectConfig, ProjectRecord, Route,
+        AddRepoForm, AddRepoStep, AppConfig, AgentSessionRef, ProjectConfig, ProjectRecord, Route,
         SessionKind, SessionRecord, SessionState,
     };
     use crate::notifier::NotifySink;
@@ -84,6 +84,7 @@ mod tests {
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             },
+            notification_sent: false,
         }];
 
         let session = handle(&mut app, key_char('b')).unwrap().unwrap();
@@ -101,7 +102,7 @@ mod tests {
 
         assert_eq!(app.route, Route::AddRepo);
         assert!(app.add_repo_form.repo_input.is_empty());
-        assert_eq!(app.add_repo_form.active_field, AddRepoField::RepoInput);
+        assert_eq!(app.add_repo_form.step, AddRepoStep::ModeChoice);
     }
 
     fn test_app() -> App {
@@ -142,9 +143,8 @@ mod tests {
             selected_project: 0,
             selected_task: 0,
             add_repo_form: AddRepoForm {
+                step: AddRepoStep::ModeChoice,
                 location_input: config.managed_repo_root.display().to_string(),
-                programming_language: "rust".to_string(),
-                active_field: AddRepoField::RepoInput,
                 ..AddRepoForm::default()
             },
             creating_task: false,

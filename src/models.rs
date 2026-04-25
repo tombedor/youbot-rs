@@ -166,10 +166,13 @@ pub struct SessionRecord {
     pub task_id: String,
     pub task_title: String,
     pub session: AgentSessionRef,
+    #[serde(default)]
+    pub notification_sent: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AddRepoForm {
+    pub step: AddRepoStep,
     pub repo_input: String,
     pub location_input: String,
     pub create_new_repo: bool,
@@ -177,14 +180,33 @@ pub struct AddRepoForm {
     pub create_location_policy: usize,
     pub remote_mode: usize,
     pub auto_merge: bool,
-    pub active_field: AddRepoField,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AddRepoField {
-    #[default]
-    RepoInput,
-    LocationInput,
+impl Default for AddRepoForm {
+    fn default() -> Self {
+        Self {
+            step: AddRepoStep::ModeChoice,
+            repo_input: String::new(),
+            location_input: String::new(),
+            create_new_repo: false,
+            programming_language: "rust".to_string(),
+            create_location_policy: 0,
+            remote_mode: 2,
+            auto_merge: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddRepoStep {
+    ModeChoice,
+    ExistingPath,
+    NewName,
+    NewLocation,
+    LocationPolicy,
+    Language,
+    Remote,
+    MergeMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

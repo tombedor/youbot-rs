@@ -3,6 +3,7 @@ use crate::models::{
     TaskRecord, TaskStatus,
 };
 use crate::project_registry::ProjectRegistry;
+use crate::storage;
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -33,10 +34,20 @@ impl TaskRepository {
         if !path.exists() {
             return Ok(Vec::new());
         }
-        parse_todo_markdown(
-            &fs::read_to_string(&path)
-                .with_context(|| format!("failed to read {}", path.display()))?,
-        )
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        match parse_todo_markdown(&raw) {
+            Ok(tasks) => Ok(tasks),
+            Err(error) => {
+                let quarantine_path = storage::quarantine_corrupt(&path)?;
+                eprintln!(
+                    "warning: failed to parse {}; moved corrupt file to {}: {error}",
+                    path.display(),
+                    quarantine_path.display()
+                );
+                Ok(Vec::new())
+            }
+        }
     }
 
     pub fn create_task(
@@ -54,7 +65,9 @@ impl TaskRepository {
             sessions: Vec::new(),
         };
         tasks.push(task.clone());
-        self.write_tasks(project, &tasks)?;
+        self.write_tasks_internal(project, &tasks)?;
+        self.project_registry
+            .commit_state_snapshot("Update task state")?;
         Ok(task)
     }
 
@@ -70,7 +83,9 @@ impl TaskRepository {
             .find(|task| task.id == task_id)
             .ok_or_else(|| anyhow!("unknown task id {task_id}"))?;
         task.status = status;
-        self.write_tasks(project, &tasks)
+        self.write_tasks_internal(project, &tasks)?;
+        self.project_registry
+            .commit_state_snapshot("Update task state")
     }
 
     pub fn upsert_session(
@@ -80,22 +95,10 @@ impl TaskRepository {
         session: AgentSessionRef,
     ) -> Result<()> {
         let mut tasks = self.load_tasks(project)?;
-        let task = tasks
-            .iter_mut()
-            .find(|task| task.id == task_id)
-            .ok_or_else(|| anyhow!("unknown task id {task_id}"))?;
-
-        if let Some(existing) = task
-            .sessions
-            .iter_mut()
-            .find(|existing| existing.product == session.product)
-        {
-            *existing = session;
-        } else {
-            task.sessions.push(session);
-        }
-
-        self.write_tasks(project, &tasks)
+        self.upsert_session_in_tasks(&mut tasks, task_id, session)?;
+        self.write_tasks_internal(project, &tasks)?;
+        self.project_registry
+            .commit_state_snapshot("Update task state")
     }
 
     pub fn append_summary(
@@ -108,7 +111,7 @@ impl TaskRepository {
     ) -> Result<()> {
         let summary = summary.into();
         let mut tasks = self.load_tasks(project)?;
-        let (task_record_id, task_title) = {
+        let entry = {
             let task = tasks
                 .iter_mut()
                 .find(|task| task.id == task_id)
@@ -117,28 +120,28 @@ impl TaskRepository {
             let session = task
                 .sessions
                 .iter_mut()
-                .find(|session| session.product == product)
+                .find(|session| session.session_id == session_id)
                 .ok_or_else(|| anyhow!("no session for {}", product.label()))?;
             session.last_summary = Some(SessionSummary {
                 summary: summary.clone(),
                 updated_at: Utc::now(),
             });
             session.updated_at = Utc::now();
-            (task.id.clone(), task.title.clone())
-        };
-        self.write_tasks(project, &tasks)?;
-
-        self.append_captains_log(
-            project,
-            &CaptainLogEntry {
+            CaptainLogEntry {
                 timestamp: Utc::now(),
-                task_id: task_record_id,
-                task_title,
+                task_id: task.id.clone(),
+                task_title: task.title.clone(),
                 session_id: session_id.to_string(),
                 product,
                 summary,
-            },
-        )
+            }
+        };
+        self.write_tasks_internal(project, &tasks)?;
+        let mut entries = self.load_captains_log(project)?;
+        entries.push(entry);
+        self.write_captains_log_internal(project, &entries)?;
+        self.project_registry
+            .commit_state_snapshot("Update task session summary")
     }
 
     pub fn load_captains_log(&self, project: &ProjectRecord) -> Result<Vec<CaptainLogEntry>> {
@@ -146,32 +149,78 @@ impl TaskRepository {
         if !path.exists() {
             return Ok(Vec::new());
         }
-        parse_captains_log(
-            &fs::read_to_string(&path)
-                .with_context(|| format!("failed to read {}", path.display()))?,
-        )
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        match parse_captains_log(&raw) {
+            Ok(entries) => Ok(entries),
+            Err(error) => {
+                let quarantine_path = storage::quarantine_corrupt(&path)?;
+                eprintln!(
+                    "warning: failed to parse {}; moved corrupt file to {}: {error}",
+                    path.display(),
+                    quarantine_path.display()
+                );
+                Ok(Vec::new())
+            }
+        }
     }
 
     pub fn write_tasks(&self, project: &ProjectRecord, tasks: &[TaskRecord]) -> Result<()> {
+        self.write_tasks_internal(project, tasks)?;
+        self.project_registry
+            .commit_state_snapshot("Update task state")
+    }
+
+    pub fn upsert_session_without_commit(
+        &self,
+        project: &ProjectRecord,
+        task_id: &str,
+        session: AgentSessionRef,
+    ) -> Result<()> {
+        let mut tasks = self.load_tasks(project)?;
+        self.upsert_session_in_tasks(&mut tasks, task_id, session)?;
+        self.write_tasks_internal(project, &tasks)
+    }
+
+    fn write_tasks_internal(&self, project: &ProjectRecord, tasks: &[TaskRecord]) -> Result<()> {
         let project_dir = self.project_state_dir(project);
         fs::create_dir_all(&project_dir)
             .with_context(|| format!("failed to create {}", project_dir.display()))?;
         let path = self.todo_path(project);
-        fs::write(&path, render_todo_markdown(tasks))
+        storage::atomic_write(&path, render_todo_markdown(tasks))
             .with_context(|| format!("failed to write {}", path.display()))?;
-        self.project_registry
-            .commit_state_snapshot("Update task state")?;
         Ok(())
     }
 
-    fn append_captains_log(&self, project: &ProjectRecord, entry: &CaptainLogEntry) -> Result<()> {
-        let mut entries = self.load_captains_log(project)?;
-        entries.push(entry.clone());
+    fn write_captains_log_internal(
+        &self,
+        project: &ProjectRecord,
+        entries: &[CaptainLogEntry],
+    ) -> Result<()> {
         let path = self.captains_log_path(project);
-        fs::write(&path, render_captains_log(&entries))
+        storage::atomic_write(&path, render_captains_log(entries))
             .with_context(|| format!("failed to write {}", path.display()))?;
-        self.project_registry
-            .commit_state_snapshot("Update captain's log")?;
+        Ok(())
+    }
+
+    fn upsert_session_in_tasks(
+        &self,
+        tasks: &mut [TaskRecord],
+        task_id: &str,
+        session: AgentSessionRef,
+    ) -> Result<()> {
+        let task = tasks
+            .iter_mut()
+            .find(|task| task.id == task_id)
+            .ok_or_else(|| anyhow!("unknown task id {task_id}"))?;
+
+        if let Some(existing) = task.sessions.iter_mut().find(|existing| {
+            existing.product == session.product && existing.session_kind == session.session_kind
+        }) {
+            *existing = session;
+        } else {
+            task.sessions.push(session);
+        }
         Ok(())
     }
 
@@ -341,5 +390,39 @@ mod tests {
         let parsed = parse_captains_log(&body).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].summary, "Summary");
+    }
+
+    #[test]
+    fn load_tasks_quarantines_corrupt_file_and_recovers() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_root = temp.path().join(".youbot");
+        let registry = ProjectRegistry::new(state_root.clone());
+        let repo = TaskRepository::new(state_root.clone(), registry);
+        let project = ProjectRecord {
+            id: "project-1".to_string(),
+            name: "example".to_string(),
+            path: temp.path().join("repo"),
+            created_at: Utc::now(),
+            config: crate::models::ProjectConfig::default(),
+        };
+        std::fs::create_dir_all(project.path.clone()).unwrap();
+        let todo_path = state_root.join("projects").join("project-1").join("TODO.md");
+        std::fs::create_dir_all(todo_path.parent().unwrap()).unwrap();
+        std::fs::write(&todo_path, "<!-- youbot:tasks {not json} -->").unwrap();
+
+        let tasks = repo.load_tasks(&project).unwrap();
+
+        assert!(tasks.is_empty());
+        assert!(!todo_path.exists());
+        let quarantined = std::fs::read_dir(todo_path.parent().unwrap())
+            .unwrap()
+            .any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("TODO.md.corrupt-")
+            });
+        assert!(quarantined);
     }
 }

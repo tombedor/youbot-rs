@@ -1,3 +1,4 @@
+use crate::storage;
 use crate::models::AppConfig;
 use anyhow::{Context, Result};
 use std::fs;
@@ -20,8 +21,20 @@ pub fn load_or_create() -> Result<AppConfig> {
     if path.exists() {
         let raw = fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        config = serde_json::from_str(&raw)
-            .with_context(|| format!("failed to parse {}", path.display()))?;
+        config = match serde_json::from_str(&raw) {
+            Ok(config) => config,
+            Err(error) => {
+                let quarantine_path = storage::quarantine_corrupt(&path)?;
+                eprintln!(
+                    "warning: failed to parse {}; moved corrupt file to {}: {error}",
+                    path.display(),
+                    quarantine_path.display()
+                );
+                let fresh = AppConfig::default();
+                save(&fresh)?;
+                fresh
+            }
+        };
     } else {
         save(&config)?;
     }
@@ -42,7 +55,8 @@ pub fn save(config: &AppConfig) -> Result<()> {
         .with_context(|| format!("failed to create {}", config.state_root.display()))?;
     let body = serde_json::to_string_pretty(config)?;
     let path = config_path(&config.state_root);
-    fs::write(&path, body).with_context(|| format!("failed to write {}", path.display()))?;
+    storage::atomic_write(&path, body)
+        .with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
 }
 

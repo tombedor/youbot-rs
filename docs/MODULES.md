@@ -52,13 +52,13 @@ depends on: TaskRepository for CRUD ops on tasks
 
 ## TUI views
 - each view has a controller, follow standard MVC architecture. Views are under a views/ , controllers under controllers/
+- AddRepoView/AddRepoController should implement a sequential wizard flow with explicit steps rather than a flat form with hotkey toggles.
 
   - HomeView
   - ProjectDetailView
   - TaskView
   - LiveCodingSessionView
   - AddRepoView
-
 
 
 

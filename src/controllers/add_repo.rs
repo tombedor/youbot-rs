@@ -1,6 +1,6 @@
 use crate::app::App;
 use crate::config;
-use crate::models::{AddRepoField, Route};
+use crate::models::{AddRepoStep, Route};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 use std::path::PathBuf;
@@ -11,64 +11,122 @@ pub fn handle(app: &mut App, key: KeyEvent) -> Result<Option<String>> {
             app.reset_add_repo_form();
             app.route = Route::Home;
         }
-        KeyCode::Tab => {
-            app.add_repo_form.active_field = match app.add_repo_form.active_field {
-                AddRepoField::RepoInput => AddRepoField::LocationInput,
-                AddRepoField::LocationInput => AddRepoField::RepoInput,
-            };
-        }
-        KeyCode::Char('m') => {
-            app.add_repo_form.create_new_repo = !app.add_repo_form.create_new_repo;
-            app.add_repo_form.active_field = AddRepoField::RepoInput;
-        }
-        KeyCode::Char('r') if app.add_repo_form.create_new_repo => {
-            app.add_repo_form.remote_mode = (app.add_repo_form.remote_mode + 1) % 3
-        }
-        KeyCode::Char('w') if app.add_repo_form.create_new_repo => {
-            app.add_repo_form.create_location_policy =
-                (app.add_repo_form.create_location_policy + 1) % 3
-        }
-        KeyCode::Char('l') if app.add_repo_form.create_new_repo => {
-            app.add_repo_form.programming_language =
-                next_language(&app.add_repo_form.programming_language).to_string();
-        }
-        KeyCode::Char('p') => {
-            app.add_repo_form.auto_merge = !app.add_repo_form.auto_merge;
-        }
+        KeyCode::Left | KeyCode::Right => handle_choice_cycle(app),
         KeyCode::Backspace => {
             active_input(app).pop();
         }
-        KeyCode::Char(ch) => active_input(app).push(ch),
-        KeyCode::Enter => {
-            let mut success_message = "Project added".to_string();
-            if app.add_repo_form.create_new_repo {
-                if let Some(message) = save_new_repo(app)? {
-                    success_message = message;
-                }
-            } else {
-                let path = app.add_repo_form.repo_input.trim();
-                if path.is_empty() {
-                    app.status = "Enter an existing repo path first".to_string();
-                    return Ok(None);
-                }
-                app.project_registry
-                    .add_existing_repo(PathBuf::from(path), app.add_repo_form.auto_merge)?;
-            }
-            app.projects = app.project_registry.load()?;
-            app.selected_project = app.projects.len().saturating_sub(1);
-            app.reload_tasks()?;
-            app.reset_add_repo_form();
-            app.route = Route::Home;
-            app.status = success_message;
-        }
+        KeyCode::Char(ch) => handle_char(app, ch),
+        KeyCode::Enter => submit_step(app)?,
         _ => {}
     }
     Ok(None)
 }
 
+fn handle_choice_cycle(app: &mut App) {
+    match app.add_repo_form.step {
+        AddRepoStep::ModeChoice => {
+            app.add_repo_form.create_new_repo = !app.add_repo_form.create_new_repo;
+        }
+        AddRepoStep::LocationPolicy => {
+            app.add_repo_form.create_location_policy =
+                (app.add_repo_form.create_location_policy + 1) % 3;
+        }
+        AddRepoStep::Language => {
+            app.add_repo_form.programming_language =
+                next_language(&app.add_repo_form.programming_language).to_string();
+        }
+        AddRepoStep::Remote => {
+            app.add_repo_form.remote_mode = (app.add_repo_form.remote_mode + 1) % 3;
+        }
+        AddRepoStep::MergeMode => {
+            app.add_repo_form.auto_merge = !app.add_repo_form.auto_merge;
+        }
+        _ => {}
+    }
+}
+
+fn handle_char(app: &mut App, ch: char) {
+    match app.add_repo_form.step {
+        AddRepoStep::ModeChoice
+        | AddRepoStep::LocationPolicy
+        | AddRepoStep::Language
+        | AddRepoStep::Remote
+        | AddRepoStep::MergeMode => {}
+        _ => active_input(app).push(ch),
+    }
+}
+
+fn active_input(app: &mut App) -> &mut String {
+    match app.add_repo_form.step {
+        AddRepoStep::ExistingPath | AddRepoStep::NewLocation => &mut app.add_repo_form.location_input,
+        AddRepoStep::NewName => &mut app.add_repo_form.repo_input,
+        AddRepoStep::ModeChoice
+        | AddRepoStep::LocationPolicy
+        | AddRepoStep::Language
+        | AddRepoStep::Remote
+        | AddRepoStep::MergeMode => &mut app.add_repo_form.repo_input,
+    }
+}
+
+fn submit_step(app: &mut App) -> Result<()> {
+    match app.add_repo_form.step {
+        AddRepoStep::ModeChoice => {
+            app.add_repo_form.step = if app.add_repo_form.create_new_repo {
+                AddRepoStep::NewName
+            } else {
+                AddRepoStep::ExistingPath
+            };
+        }
+        AddRepoStep::ExistingPath => {
+            if app.add_repo_form.location_input.trim().is_empty() {
+                app.status = "Enter an existing repo path first".to_string();
+            } else {
+                app.add_repo_form.step = AddRepoStep::MergeMode;
+            }
+        }
+        AddRepoStep::NewName => {
+            if app.add_repo_form.repo_input.trim().is_empty() {
+                app.status = "Enter a repo name first".to_string();
+            } else {
+                app.add_repo_form.step = AddRepoStep::NewLocation;
+            }
+        }
+        AddRepoStep::NewLocation => {
+            if app.add_repo_form.location_input.trim().is_empty() {
+                app.status = "Enter a create location first".to_string();
+            } else {
+                app.add_repo_form.step = AddRepoStep::LocationPolicy;
+            }
+        }
+        AddRepoStep::LocationPolicy => app.add_repo_form.step = AddRepoStep::Language,
+        AddRepoStep::Language => app.add_repo_form.step = AddRepoStep::Remote,
+        AddRepoStep::Remote => app.add_repo_form.step = AddRepoStep::MergeMode,
+        AddRepoStep::MergeMode => save_form(app)?,
+    }
+    Ok(())
+}
+
+fn save_form(app: &mut App) -> Result<()> {
+    let success_message = if app.add_repo_form.create_new_repo {
+        save_new_repo(app)?
+    } else {
+        let path = app.add_repo_form.location_input.trim();
+        app.project_registry
+            .add_existing_repo(PathBuf::from(path), app.add_repo_form.auto_merge)?;
+        "Project added".to_string()
+    };
+
+    app.projects = app.project_registry.load()?;
+    app.selected_project = app.projects.len().saturating_sub(1);
+    app.reload_tasks()?;
+    app.reset_add_repo_form();
+    app.route = Route::Home;
+    app.status = success_message;
+    Ok(())
+}
+
 fn next_language(current: &str) -> &'static str {
     match current.to_ascii_lowercase().as_str() {
-        "" => "rust",
         "rust" => "python",
         "python" => "typescript",
         "typescript" => "none",
@@ -76,36 +134,12 @@ fn next_language(current: &str) -> &'static str {
     }
 }
 
-fn active_input(app: &mut App) -> &mut String {
-    match app.add_repo_form.active_field {
-        AddRepoField::RepoInput => &mut app.add_repo_form.repo_input,
-        AddRepoField::LocationInput => &mut app.add_repo_form.location_input,
-    }
-}
-
-fn save_new_repo(app: &mut App) -> Result<Option<String>> {
-    let name = app.add_repo_form.repo_input.trim();
-    if name.is_empty() {
-        app.status = "Enter a repo name first".to_string();
-        return Ok(None);
-    }
-
-    let root = app.add_repo_form.location_input.trim();
-    if root.is_empty() {
-        app.status = "Enter a create location first".to_string();
-        return Ok(None);
-    }
-
-    let root = PathBuf::from(root);
-    let language = if app.add_repo_form.programming_language.is_empty() {
-        "rust".to_string()
-    } else {
-        app.add_repo_form.programming_language.clone()
-    };
+fn save_new_repo(app: &mut App) -> Result<String> {
+    let root = PathBuf::from(app.add_repo_form.location_input.trim());
     app.project_registry.create_new_repo(
         &root,
-        name,
-        &language,
+        app.add_repo_form.repo_input.trim(),
+        &app.add_repo_form.programming_language,
         app.add_repo_form.auto_merge,
         app.add_repo_form.remote_mode,
     )?;
@@ -113,12 +147,10 @@ fn save_new_repo(app: &mut App) -> Result<Option<String>> {
     if matches!(app.add_repo_form.create_location_policy, 0 | 2) {
         app.config.managed_repo_root = root;
         config::save(&app.config)?;
-        return Ok(Some(
-            "Project added and default repo location updated".to_string(),
-        ));
+        Ok("Project added and default repo location updated".to_string())
+    } else {
+        Ok("Project added".to_string())
     }
-
-    Ok(None)
 }
 
 #[cfg(test)]
@@ -126,7 +158,7 @@ mod tests {
     use super::handle;
     use crate::app::App;
     use crate::coding_agent_supervisor::CodingAgentSupervisor;
-    use crate::models::{AddRepoField, AddRepoForm, AppConfig, Route};
+    use crate::models::{AddRepoForm, AddRepoStep, AppConfig, Route};
     use crate::notifier::NotifySink;
     use crate::project_registry::ProjectRegistry;
     use crate::session_manager::SessionManager;
@@ -139,21 +171,43 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn mode_choice_advances_sequentially_to_existing_path() {
+        let temp = tempdir().unwrap();
+        let mut app = test_app(temp.path());
+        app.route = Route::AddRepo;
+
+        handle(&mut app, key_enter()).unwrap();
+
+        assert_eq!(app.add_repo_form.step, AddRepoStep::ExistingPath);
+    }
+
+    #[test]
+    fn mode_choice_can_switch_to_new_repo_without_typing_conflict() {
+        let temp = tempdir().unwrap();
+        let mut app = test_app(temp.path());
+        app.route = Route::AddRepo;
+
+        handle(&mut app, key_right()).unwrap();
+        handle(&mut app, key_enter()).unwrap();
+
+        assert!(app.add_repo_form.create_new_repo);
+        assert_eq!(app.add_repo_form.step, AddRepoStep::NewName);
+    }
+
+    #[test]
     fn create_new_repo_updates_default_location_when_policy_requires_it() {
         let temp = tempdir().unwrap();
         let create_root = temp.path().join("managed");
         let mut app = test_app(temp.path());
         app.route = Route::AddRepo;
-        app.add_repo_form = AddRepoForm {
-            repo_input: "demo".to_string(),
-            location_input: create_root.display().to_string(),
-            create_new_repo: true,
-            programming_language: "rust".to_string(),
-            create_location_policy: 0,
-            remote_mode: 2,
-            auto_merge: true,
-            active_field: AddRepoField::RepoInput,
-        };
+        app.add_repo_form.step = AddRepoStep::MergeMode;
+        app.add_repo_form.create_new_repo = true;
+        app.add_repo_form.repo_input = "demo".to_string();
+        app.add_repo_form.location_input = create_root.display().to_string();
+        app.add_repo_form.programming_language = "rust".to_string();
+        app.add_repo_form.create_location_policy = 0;
+        app.add_repo_form.remote_mode = 2;
+        app.add_repo_form.auto_merge = true;
 
         handle(&mut app, key_enter()).unwrap();
 
@@ -171,26 +225,15 @@ mod tests {
         std::fs::create_dir_all(&repo_path).unwrap();
         let mut app = test_app(temp.path());
         app.route = Route::AddRepo;
-        app.add_repo_form.repo_input = repo_path.display().to_string();
+        app.add_repo_form.step = AddRepoStep::MergeMode;
+        app.add_repo_form.location_input = repo_path.display().to_string();
         app.add_repo_form.auto_merge = true;
 
         handle(&mut app, key_enter()).unwrap();
 
         assert_eq!(app.projects.len(), 1);
-        assert_eq!(app.projects[0].path, repo_path);
+        assert_eq!(app.projects[0].path, std::fs::canonicalize(&repo_path).unwrap());
         assert!(app.projects[0].config.auto_merge);
-    }
-
-    #[test]
-    fn tab_switches_active_add_repo_field() {
-        let temp = tempdir().unwrap();
-        let mut app = test_app(temp.path());
-        app.route = Route::AddRepo;
-        assert_eq!(app.add_repo_form.active_field, AddRepoField::RepoInput);
-
-        handle(&mut app, key_tab()).unwrap();
-
-        assert_eq!(app.add_repo_form.active_field, AddRepoField::LocationInput);
     }
 
     fn test_app(root: &Path) -> App {
@@ -223,8 +266,6 @@ mod tests {
             selected_task: 0,
             add_repo_form: AddRepoForm {
                 location_input: config.managed_repo_root.display().to_string(),
-                programming_language: "rust".to_string(),
-                active_field: AddRepoField::RepoInput,
                 ..AddRepoForm::default()
             },
             creating_task: false,
@@ -243,8 +284,8 @@ mod tests {
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
     }
 
-    fn key_tab() -> KeyEvent {
-        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)
+    fn key_right() -> KeyEvent {
+        KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)
     }
 
     struct NoopTmux;

@@ -1,3 +1,4 @@
+use crate::storage;
 use crate::models::{ProjectConfig, ProjectRecord};
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
@@ -29,8 +30,18 @@ impl ProjectRegistry {
         }
         let raw = fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let projects = serde_json::from_str(&raw)
-            .with_context(|| format!("failed to parse {}", path.display()))?;
+        let projects = match serde_json::from_str(&raw) {
+            Ok(projects) => projects,
+            Err(error) => {
+                let quarantine_path = storage::quarantine_corrupt(&path)?;
+                eprintln!(
+                    "warning: failed to parse {}; moved corrupt file to {}: {error}",
+                    path.display(),
+                    quarantine_path.display()
+                );
+                Vec::new()
+            }
+        };
         Ok(projects)
     }
 
@@ -39,7 +50,8 @@ impl ProjectRegistry {
             .with_context(|| format!("failed to create {}", self.state_root.display()))?;
         let body = serde_json::to_string_pretty(projects)?;
         let path = self.registry_path();
-        fs::write(&path, body).with_context(|| format!("failed to write {}", path.display()))?;
+        storage::atomic_write(&path, body)
+            .with_context(|| format!("failed to write {}", path.display()))?;
         self.commit_state_snapshot("Update project registry")
     }
 
@@ -48,11 +60,14 @@ impl ProjectRegistry {
         path: impl Into<PathBuf>,
         auto_merge: bool,
     ) -> Result<ProjectRecord> {
-        let path = normalize_repo_path(path.into())?;
+        let path = canonicalize_repo_path(path.into())?;
         if !path.exists() {
             return Err(anyhow!("repo path does not exist: {}", path.display()));
         }
         let mut projects = self.load()?;
+        if projects.iter().any(|project| project.path == path) {
+            return Err(anyhow!("repo already registered: {}", path.display()));
+        }
         let name = infer_name(&path);
         let record = ProjectRecord {
             id: Uuid::new_v4().to_string(),
@@ -74,15 +89,25 @@ impl ProjectRegistry {
         auto_merge: bool,
         remote_mode: usize,
     ) -> Result<ProjectRecord> {
+        let root = normalize_repo_path(root.to_path_buf())?;
         let repo_path = root.join(name);
         fs::create_dir_all(&repo_path)
             .with_context(|| format!("failed to create {}", repo_path.display()))?;
         ensure_git_repo(&repo_path)?;
         write_gitignore(&repo_path, programming_language)?;
         if remote_mode < 2 {
-            create_github_remote(&repo_path, name, remote_mode == 0)?;
+            if let Err(error) = create_github_remote(&repo_path, name, remote_mode == 0) {
+                let _ = fs::remove_dir_all(&repo_path);
+                return Err(error);
+            }
         }
-        self.add_existing_repo(repo_path, auto_merge)
+        match self.add_existing_repo(repo_path.clone(), auto_merge) {
+            Ok(record) => Ok(record),
+            Err(error) => {
+                let _ = fs::remove_dir_all(&repo_path);
+                Err(error)
+            }
+        }
     }
 
     pub fn update_project_config(&self, project_id: &str, auto_merge: bool) -> Result<()> {
@@ -98,11 +123,17 @@ impl ProjectRegistry {
     pub fn commit_state_snapshot(&self, message: &str) -> Result<()> {
         let git_dir = self.state_root.join(".git");
         if !git_dir.exists() {
-            run_git(&self.state_root, ["init"])?;
+            if let Err(error) = run_git(&self.state_root, ["init"]) {
+                return Ok(log_commit_failure("git init", error));
+            }
         }
 
-        run_git(&self.state_root, ["add", "."])?;
-        run_git_commit(&self.state_root, message)?;
+        if let Err(error) = run_git(&self.state_root, ["add", "."]) {
+            return Ok(log_commit_failure("git add", error));
+        }
+        if let Err(error) = run_git_commit(&self.state_root, message) {
+            return Ok(log_commit_failure("git commit", error));
+        }
         Ok(())
     }
 }
@@ -175,6 +206,12 @@ fn normalize_repo_path(path: PathBuf) -> Result<PathBuf> {
     Ok(path)
 }
 
+fn canonicalize_repo_path(path: PathBuf) -> Result<PathBuf> {
+    let normalized = normalize_repo_path(path)?;
+    std::fs::canonicalize(&normalized)
+        .with_context(|| format!("failed to canonicalize {}", normalized.display()))
+}
+
 fn run_git<const N: usize>(cwd: &Path, args: [&str; N]) -> Result<()> {
     let output = Command::new("git")
         .args(args)
@@ -237,6 +274,10 @@ fn run_git_commit(cwd: &Path, message: &str) -> Result<()> {
     ))
 }
 
+fn log_commit_failure(operation: &str, error: anyhow::Error) {
+    eprintln!("warning: state history {operation} failed: {error:#}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::{normalize_repo_path, ProjectRegistry};
@@ -284,5 +325,19 @@ mod tests {
 
         let loaded = registry.load().unwrap();
         assert!(loaded[0].config.auto_merge);
+    }
+
+    #[test]
+    fn add_existing_repo_rejects_duplicate_canonical_path() {
+        let temp = tempdir().unwrap();
+        let state_root = temp.path().join(".youbot");
+        let registry = ProjectRegistry::new(state_root);
+        let repo_path = temp.path().join("repo");
+        std::fs::create_dir_all(&repo_path).unwrap();
+        registry.add_existing_repo(&repo_path, false).unwrap();
+
+        let error = registry.add_existing_repo(&repo_path, false).unwrap_err();
+
+        assert!(error.to_string().contains("repo already registered"));
     }
 }

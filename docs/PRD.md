@@ -29,14 +29,17 @@ Actions available:
 - Enter add repo flow
 
 ## Add repo flow
-user prompts in succession:
-- if repo exists already? if so what location?
-- create a new repo? if so, where?
+user prompts in a sequential wizard. UI asks one question at a time, type characters only answer current question:
+- if repo exists already, or should a new repo be created?
+- if repo exists already: what location?
+- if creating a new repo: what repo name?
+- if creating a new repo: where should it be created?
     (options below should *only be surfaced if we are creating a new repo)
     - for specified repo, option for a) always create new repos here b) just create this one here, c) just create this one and dont ask again
     - what programming language?
         - for programming language, a reasonable default .gitignore is created
     - create remote? a) public b) private c) none (remote creates github repo)
+- for either existing or new repos: whether this repo should auto-merge or open PRs
 
 
 

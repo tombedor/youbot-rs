@@ -6,7 +6,7 @@ use tempfile::tempdir;
 use youbot_rs::app::App;
 use youbot_rs::coding_agent_supervisor::CodingAgentSupervisor;
 use youbot_rs::models::{
-    AddRepoField, AddRepoForm, AppConfig, CodingAgentProduct, Route, SessionKind,
+    AddRepoForm, AddRepoStep, AppConfig, CodingAgentProduct, Route, SessionKind,
 };
 use youbot_rs::notifier::NotifySink;
 use youbot_rs::project_registry::ProjectRegistry;
@@ -115,9 +115,8 @@ fn test_app(root: &Path) -> (App, Arc<Mutex<FakeTmuxState>>) {
         selected_project: 0,
         selected_task: 0,
         add_repo_form: AddRepoForm {
+            step: AddRepoStep::ModeChoice,
             location_input: config.managed_repo_root.display().to_string(),
-            programming_language: "rust".to_string(),
-            active_field: AddRepoField::RepoInput,
             ..AddRepoForm::default()
         },
         creating_task: false,

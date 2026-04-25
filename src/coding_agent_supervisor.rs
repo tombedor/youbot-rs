@@ -1,9 +1,6 @@
-use crate::models::{
-    CaptainLogEntry, CodingAgentProduct, ProjectRecord, SessionState, TaskRecord, TaskStatus,
-};
+use crate::models::{CodingAgentProduct, ProjectRecord, SessionState, TaskRecord, TaskStatus};
 use crate::task_repository::TaskRepository;
 use anyhow::Result;
-use chrono::Utc;
 
 #[derive(Debug, Clone)]
 pub struct CodingAgentSupervisor {
@@ -45,23 +42,6 @@ impl CodingAgentSupervisor {
             session_id,
             summary,
         )?;
-
-        if matches!(state, SessionState::Completed | SessionState::Stuck) {
-            let _ = self
-                .task_repository
-                .load_captains_log(project)
-                .map(|mut entries| {
-                    entries.push(CaptainLogEntry {
-                        timestamp: Utc::now(),
-                        task_id: task.id.clone(),
-                        task_title: task.title.clone(),
-                        session_id: session_id.to_string(),
-                        product,
-                        summary: format!("Session marked {} by supervisor.", state.label()),
-                    });
-                    entries
-                });
-        }
 
         Ok(state)
     }

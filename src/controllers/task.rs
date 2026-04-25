@@ -33,7 +33,7 @@ mod tests {
     use crate::app::App;
     use crate::coding_agent_supervisor::CodingAgentSupervisor;
     use crate::models::{
-        AddRepoField, AddRepoForm, AppConfig, AgentSessionRef, CodingAgentProduct, ProjectConfig,
+        AddRepoForm, AddRepoStep, AppConfig, AgentSessionRef, CodingAgentProduct, ProjectConfig,
         ProjectRecord, Route, SessionKind, SessionState, TaskRecord, TaskStatus,
     };
     use crate::notifier::NotifySink;
@@ -122,9 +122,8 @@ mod tests {
             selected_project: 0,
             selected_task: 0,
             add_repo_form: AddRepoForm {
+                step: AddRepoStep::ModeChoice,
                 location_input: config.managed_repo_root.display().to_string(),
-                programming_language: "rust".to_string(),
-                active_field: AddRepoField::RepoInput,
                 ..AddRepoForm::default()
             },
             creating_task: false,

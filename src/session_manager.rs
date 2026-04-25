@@ -5,6 +5,7 @@ use crate::models::{
 };
 use crate::notifier::{Notifier, NotifySink};
 use crate::project_registry::ProjectRegistry;
+use crate::storage;
 use crate::task_repository::TaskRepository;
 use crate::tmux_client::{TmuxClient, TmuxOps};
 use anyhow::{Context, Result, anyhow};
@@ -72,8 +73,18 @@ impl SessionManager {
         }
         let raw = fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        Ok(serde_json::from_str(&raw)
-            .with_context(|| format!("failed to parse {}", path.display()))?)
+        match serde_json::from_str(&raw) {
+            Ok(records) => Ok(records),
+            Err(error) => {
+                let quarantine_path = storage::quarantine_corrupt(&path)?;
+                eprintln!(
+                    "warning: failed to parse {}; moved corrupt file to {}: {error}",
+                    path.display(),
+                    quarantine_path.display()
+                );
+                Ok(Vec::new())
+            }
+        }
     }
 
     pub fn start_session(
@@ -133,10 +144,13 @@ impl SessionManager {
             task_id: task.id.clone(),
             task_title: task.title.clone(),
             session: session.clone(),
+            notification_sent: false,
         });
-        self.save_sessions(&sessions)?;
         self.task_repository
-            .upsert_session(project, &task.id, session.clone())?;
+            .upsert_session_without_commit(project, &task.id, session.clone())?;
+        self.save_sessions_internal(&sessions)?;
+        self.project_registry
+            .commit_state_snapshot("Start session")?;
         Ok(session)
     }
 
@@ -167,35 +181,44 @@ impl SessionManager {
             .find(|task| task.id == record.task_id)
             .ok_or_else(|| anyhow!("unknown task {}", record.task_id))?;
 
-        let session_exists = self.tmux.session_exists(session_name);
-        let transcript = if session_exists {
-            self.tmux.capture_pane(session_name).unwrap_or_default()
-        } else {
-            String::new()
-        };
         let session_id = record.session.session_id.clone();
-        let product = record.session.product.clone();
-        let status = self.supervisor.evaluate_live_session(
-            project,
-            task,
-            product,
-            &session_id,
-            &transcript,
-        )?;
-        record.session.state = if session_exists {
-            SessionState::Active
+        let session_exists = self.tmux.session_exists(session_name);
+        if session_exists {
+            let transcript = self.tmux.capture_pane(session_name).unwrap_or_default();
+            let product = record.session.product.clone();
+            let status = self.supervisor.evaluate_live_session(
+                project,
+                task,
+                product,
+                &session_id,
+                &transcript,
+            )?;
+            record.session.state = SessionState::Active;
+            record.session.updated_at = Utc::now();
+            self.task_repository
+                .upsert_session_without_commit(project, &record.task_id, record.session.clone())?;
+            self.save_sessions_internal(&sessions)?;
+            self.project_registry
+                .commit_state_snapshot("Finalize attached session")?;
+            return Ok(Some(format!(
+                "Reviewed session {} and set task to {}",
+                session_id,
+                status.label()
+            )));
         } else {
-            SessionState::Exited
-        };
+            record.session.state = SessionState::Exited;
+        }
         record.session.updated_at = Utc::now();
+        record.notification_sent = false;
         self.task_repository
-            .upsert_session(project, &record.task_id, record.session.clone())?;
-        self.save_sessions(&sessions)?;
+            .upsert_session_without_commit(project, &record.task_id, record.session.clone())?;
+        self.save_sessions_internal(&sessions)?;
+        self.project_registry
+            .commit_state_snapshot("Finalize attached session")?;
 
         Ok(Some(format!(
-            "Reviewed session {} and set task to {}",
-            session_id,
-            status.label()
+            "Session {} exited before transcript could be captured",
+            session_id
         )))
     }
 
@@ -231,7 +254,7 @@ impl SessionManager {
             )?;
             record.session.state = state.clone();
             record.session.updated_at = Utc::now();
-            self.task_repository.upsert_session(
+            self.task_repository.upsert_session_without_commit(
                 project,
                 &record.task_id,
                 record.session.clone(),
@@ -244,26 +267,31 @@ impl SessionManager {
             }
 
             if matches!(state, SessionState::Completed | SessionState::Stuck) {
-                let _ = self.notifier.notify(
-                    "youbot background session",
-                    &format!("{} is {}", record.task_title, state.label()),
-                );
+                if !record.notification_sent {
+                    let _ = self.notifier.notify(
+                        "youbot background session",
+                        &format!("{} is {}", record.task_title, state.label()),
+                    );
+                    record.notification_sent = true;
+                }
+            } else {
+                record.notification_sent = false;
             }
         }
-        self.save_sessions(&sessions)?;
+        self.save_sessions_internal(&sessions)?;
+        self.project_registry
+            .commit_state_snapshot("Poll sessions")?;
         Ok(sessions)
     }
 
-    fn save_sessions(&self, sessions: &[SessionRecord]) -> Result<()> {
+    fn save_sessions_internal(&self, sessions: &[SessionRecord]) -> Result<()> {
         let path = self.sessions_path();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
         }
-        fs::write(&path, serde_json::to_string_pretty(sessions)?)
+        storage::atomic_write(&path, serde_json::to_string_pretty(sessions)?)
             .with_context(|| format!("failed to write {}", path.display()))?;
-        self.project_registry
-            .commit_state_snapshot("Update session state")?;
         Ok(())
     }
 
@@ -362,6 +390,7 @@ mod tests {
             task_id: task.id.clone(),
             task_title: task.title.clone(),
             session: task.sessions[0].clone(),
+            notification_sent: false,
         }]);
         {
             let mut tmux = ctx.tmux_state.lock().unwrap();
@@ -408,6 +437,7 @@ mod tests {
             task_id: task.id.clone(),
             task_title: task.title.clone(),
             session: task.sessions[0].clone(),
+            notification_sent: false,
         }]);
         {
             let mut tmux = ctx.tmux_state.lock().unwrap();
@@ -427,6 +457,42 @@ mod tests {
         assert_eq!(sessions[0].session.state, SessionState::Completed);
         assert_eq!(tasks[0].status, TaskStatus::Complete);
         assert_eq!(ctx.notify_state.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn poll_does_not_repeat_notification_for_already_notified_session() {
+        let ctx = TestContext::new();
+        let task = ctx.create_task_with_session(
+            "Completed task",
+            AgentSessionRef {
+                product: CodingAgentProduct::Codex,
+                session_kind: SessionKind::Background,
+                tmux_session_name: "done-session".to_string(),
+                session_id: "session-2".to_string(),
+                state: SessionState::Completed,
+                branch_name: None,
+                last_summary: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            },
+        );
+        ctx.write_sessions(vec![SessionRecord {
+            project_id: ctx.project.id.clone(),
+            task_id: task.id.clone(),
+            task_title: task.title.clone(),
+            session: task.sessions[0].clone(),
+            notification_sent: true,
+        }]);
+        {
+            let mut tmux = ctx.tmux_state.lock().unwrap();
+            tmux.existing.insert("done-session".to_string());
+            tmux.transcripts
+                .insert("done-session".to_string(), "Implemented fix\nCompleted".to_string());
+        }
+
+        ctx.manager.poll(std::slice::from_ref(&ctx.project)).unwrap();
+
+        assert!(ctx.notify_state.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -451,6 +517,7 @@ mod tests {
             task_id: task.id.clone(),
             task_title: task.title.clone(),
             session: task.sessions[0].clone(),
+            notification_sent: false,
         }]);
 
         let message = ctx
@@ -460,9 +527,9 @@ mod tests {
             .unwrap();
         let sessions = ctx.manager.load_sessions().unwrap();
 
-        assert!(message.contains("set task to TODO"));
+        assert!(message.contains("exited before transcript could be captured"));
         assert_eq!(sessions[0].session.state, SessionState::Exited);
-        assert!(ctx.repo.load_captains_log(&ctx.project).unwrap().len() >= 1);
+        assert!(ctx.repo.load_captains_log(&ctx.project).unwrap().is_empty());
     }
 
     struct TestContext {
