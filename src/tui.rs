@@ -20,7 +20,7 @@ fn run_loop(mut terminal: DefaultTerminal, app: &mut App) -> anyhow::Result<()> 
         maybe_refresh(app, &mut last_refresh, Instant::now());
 
         terminal.draw(|frame| render(frame, app))?;
-        if app.should_quit {
+        if app.should_quit() {
             break;
         }
 
@@ -64,26 +64,26 @@ fn handle_input_event(app: &mut App, input: Event) -> Result<Option<String>> {
 
 fn handle_attach_transition(app: &mut App, session_name: &str, attach_result: Result<()>) {
     if let Err(error) = attach_result {
-        app.status = format!("Failed to attach: {error:#}");
+        app.set_status(format!("Failed to attach: {error:#}"));
         return;
     }
 
     if let Ok(Some(status)) = app
         .services
         .session_service
-        .finalize_attached_session(&app.projects, session_name)
+        .finalize_attached_session(session_name)
     {
-        app.status = status;
+        app.set_status(status);
     } else {
-        app.status = "Returned from live session".to_string();
+        app.set_status("Returned from live session");
     }
     let _ = app.refresh();
-    app.route = Route::Home;
+    app.set_route(Route::Home);
 }
 
 fn render(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
-    match app.route {
+    match app.route() {
         Route::Home => ui::home::view::render(frame, app, area),
         Route::ProjectDetail => ui::project_detail::view::render(frame, app, area),
         Route::TaskDetail => ui::task::view::render(frame, app, area),

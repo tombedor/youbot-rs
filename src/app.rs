@@ -1,31 +1,13 @@
 use crate::application::context::AppServices;
-use crate::domain::{
-    AppConfig, CodingAgentProduct, ProjectRecord, SessionKind, SessionRecord, SessionState,
-    TaskRecord, TaskStatus,
-};
+use crate::domain::{AppConfig, ProjectRecord, SessionRecord, TaskRecord, TaskStatus};
 use crate::ui;
-use crate::ui::state::{AppState, Route};
-use anyhow::{Result, anyhow};
+use crate::ui::state::{AddRepoForm, AppState, ProjectDetailState, Route};
+use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent};
-use std::ops::{Deref, DerefMut};
 
 pub struct App {
     pub services: AppServices,
     pub state: AppState,
-}
-
-impl Deref for App {
-    type Target = AppState;
-
-    fn deref(&self) -> &Self::Target {
-        &self.state
-    }
-}
-
-impl DerefMut for App {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.state
-    }
 }
 
 impl App {
@@ -36,11 +18,11 @@ impl App {
     pub fn load() -> Result<Self> {
         let services = AppServices::load()?;
         let mut state = AppState::new(&services.config);
-        state.projects = services.project_catalog.load()?;
+        state.projects = services.project_service.load_projects()?;
         state.tasks = state
             .projects
             .first()
-            .map(|project| services.task_store.load_tasks(project))
+            .map(|project| services.task_service.load_tasks(project))
             .transpose()?
             .unwrap_or_default();
         state.sessions = services.session_service.load_sessions().unwrap_or_default();
@@ -51,31 +33,165 @@ impl App {
         &self.services.config
     }
 
+    pub fn route(&self) -> Route {
+        self.state.route
+    }
+
+    pub fn set_route(&mut self, route: Route) {
+        self.state.route = route;
+    }
+
+    pub fn should_quit(&self) -> bool {
+        self.state.should_quit
+    }
+
+    pub fn request_quit(&mut self) {
+        self.state.should_quit = true;
+    }
+
+    pub fn status(&self) -> &str {
+        &self.state.status
+    }
+
+    pub fn set_status(&mut self, status: impl Into<String>) {
+        self.state.status = status.into();
+    }
+
+    pub fn projects(&self) -> &[ProjectRecord] {
+        &self.state.projects
+    }
+
+    pub fn tasks(&self) -> &[TaskRecord] {
+        &self.state.tasks
+    }
+
+    pub fn sessions(&self) -> &[SessionRecord] {
+        &self.state.sessions
+    }
+
+    pub fn add_repo_form(&self) -> &AddRepoForm {
+        &self.state.add_repo_form
+    }
+
+    pub fn add_repo_form_mut(&mut self) -> &mut AddRepoForm {
+        &mut self.state.add_repo_form
+    }
+
+    pub fn add_repo_repo_input_mut(&mut self) -> &mut String {
+        &mut self.state.add_repo_form.repo_input
+    }
+
+    pub fn add_repo_location_input_mut(&mut self) -> &mut String {
+        &mut self.state.add_repo_form.location_input
+    }
+
+    pub fn project_detail_state(&self) -> &ProjectDetailState {
+        &self.state.project_detail_state
+    }
+
+    pub fn project_detail_state_mut(&mut self) -> &mut ProjectDetailState {
+        &mut self.state.project_detail_state
+    }
+
+    pub fn is_creating_task(&self) -> bool {
+        matches!(
+            self.state.project_detail_state,
+            ProjectDetailState::CreatingTask { .. }
+        )
+    }
+
+    pub fn is_choosing_status(&self) -> bool {
+        matches!(
+            self.state.project_detail_state,
+            ProjectDetailState::ChoosingStatus
+        )
+    }
+
+    pub fn task_draft(&self) -> &str {
+        match &self.state.project_detail_state {
+            ProjectDetailState::Browsing => "",
+            ProjectDetailState::CreatingTask { draft } => draft,
+            ProjectDetailState::ChoosingStatus => "",
+        }
+    }
+
+    pub fn task_draft_mut(&mut self) -> Option<&mut String> {
+        match &mut self.state.project_detail_state {
+            ProjectDetailState::Browsing => None,
+            ProjectDetailState::CreatingTask { draft } => Some(draft),
+            ProjectDetailState::ChoosingStatus => None,
+        }
+    }
+
+    pub fn begin_task_creation(&mut self) {
+        self.state.project_detail_state = ProjectDetailState::CreatingTask {
+            draft: String::new(),
+        };
+        self.set_status("Enter a task description and press Enter");
+    }
+
+    pub fn begin_status_selection(&mut self) {
+        self.state.project_detail_state = ProjectDetailState::ChoosingStatus;
+        self.set_status("Choose a status with 1-4, or Esc to cancel");
+    }
+
+    pub fn cancel_task_creation(&mut self) {
+        self.state.project_detail_state = ProjectDetailState::Browsing;
+        self.set_status("Task creation cancelled");
+    }
+
+    pub fn cancel_status_selection(&mut self) {
+        self.state.project_detail_state = ProjectDetailState::Browsing;
+        self.set_status("Status change cancelled");
+    }
+
+    pub fn complete_task_creation(&mut self, title: impl Into<String>) {
+        self.state.project_detail_state = ProjectDetailState::Browsing;
+        self.set_status(format!("Task created: {}", title.into()));
+    }
+
+    pub fn complete_status_selection(&mut self, status: TaskStatus) {
+        self.state.project_detail_state = ProjectDetailState::Browsing;
+        self.set_status(format!("Task status set to {}", status.label()));
+    }
+
     pub fn refresh(&mut self) -> Result<()> {
-        self.projects = self.services.project_catalog.load()?;
-        self.sessions = self
-            .services
-            .session_service
-            .poll(&self.projects)
-            .unwrap_or_default();
+        self.reload_projects()?;
+        self.reload_sessions()?;
         self.reload_tasks()
     }
 
+    pub fn selected_project_index(&self) -> usize {
+        self.state.selected_project
+    }
+
+    pub fn selected_task_index(&self) -> usize {
+        self.state.selected_task
+    }
+
+    pub fn set_selected_project_index(&mut self, index: usize) {
+        self.state.selected_project = index;
+    }
+
+    pub fn set_selected_task_index(&mut self, index: usize) {
+        self.state.selected_task = index;
+    }
+
     pub fn selected_project(&self) -> Option<&ProjectRecord> {
-        self.projects.get(self.selected_project)
+        self.state.projects.get(self.state.selected_project)
     }
 
     pub fn selected_task(&self) -> Option<&TaskRecord> {
-        self.tasks.get(self.selected_task)
+        self.state.tasks.get(self.state.selected_task)
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Result<Option<String>> {
         if key.code == KeyCode::Char('q') {
-            self.should_quit = true;
+            self.request_quit();
             return Ok(None);
         }
 
-        match self.route {
+        match self.state.route {
             Route::Home => ui::home::handler::handle(self, key),
             Route::ProjectDetail => ui::project_detail::handler::handle(self, key),
             Route::TaskDetail => ui::task::handler::handle(self, key),
@@ -86,171 +202,65 @@ impl App {
 
     pub fn latest_session_for_selected_project(&self) -> Option<&SessionRecord> {
         let project = self.selected_project()?;
-        self.sessions
+        self.state
+            .sessions
             .iter()
             .filter(|record| record.project_id == project.id)
             .max_by_key(|record| record.session.updated_at)
     }
 
-    pub fn attach_selected_project_background_session(&mut self) -> Option<String> {
-        let project = self.selected_project()?;
-        let session_name = self
-            .sessions
-            .iter()
-            .filter(|record| {
-                record.project_id == project.id
-                    && record.session.session_kind == SessionKind::Background
-                    && !matches!(record.session.state, SessionState::Exited)
-            })
-            .max_by_key(|record| record.session.updated_at)
-            .map(|record| {
-                (
-                    record.session.session_id.clone(),
-                    record.session.tmux_session_name.clone(),
-                )
-            })?;
-        self.route = Route::LiveSession;
-        self.status = format!("Session {}", session_name.0);
-        Some(session_name.1)
-    }
-
     pub fn reload_tasks(&mut self) -> Result<()> {
-        self.tasks = self
+        self.state.tasks = self
             .selected_project()
-            .map(|project| self.services.task_store.load_tasks(project))
+            .map(|project| self.services.task_service.load_tasks(project))
             .transpose()?
             .unwrap_or_default();
-        if self.selected_task >= self.tasks.len() && !self.tasks.is_empty() {
-            self.selected_task = self.tasks.len() - 1;
+        if self.state.selected_task >= self.state.tasks.len() && !self.state.tasks.is_empty() {
+            self.state.selected_task = self.state.tasks.len() - 1;
         }
         Ok(())
     }
 
-    pub fn create_task(&mut self, description: impl Into<String>) -> Result<()> {
-        let project = self
-            .selected_project()
-            .cloned()
-            .ok_or_else(|| anyhow!("no project selected"))?;
-        let description = description.into();
-        let title = self
-            .services
-            .session_review_service
-            .classify_task_title(&description);
-        self.services
-            .task_store
-            .create_task(&project, title.clone(), description)?;
-        self.reload_tasks()?;
-        self.creating_task = false;
-        self.task_draft.clear();
-        self.status = format!("Task created: {title}");
+    pub fn reload_projects(&mut self) -> Result<()> {
+        self.state.projects = self.services.project_service.load_projects()?;
+        if self.state.selected_project >= self.state.projects.len()
+            && !self.state.projects.is_empty()
+        {
+            self.state.selected_project = self.state.projects.len() - 1;
+        }
         Ok(())
     }
 
-    pub fn begin_task_creation(&mut self) {
-        self.creating_task = true;
-        self.task_draft.clear();
-        self.status = "Enter a task description and press Enter".to_string();
-    }
-
-    pub fn cancel_task_creation(&mut self) {
-        self.creating_task = false;
-        self.task_draft.clear();
-        self.status = "Task creation cancelled".to_string();
-    }
-
-    pub fn reset_add_repo_form(&mut self) {
-        self.add_repo_form = AppState::new(&self.services.config).add_repo_form;
-    }
-
-    pub fn cycle_task_status(&mut self) -> Result<()> {
-        let project = self
-            .selected_project()
-            .cloned()
-            .ok_or_else(|| anyhow!("no project selected"))?;
-        let task = self
-            .selected_task()
-            .cloned()
-            .ok_or_else(|| anyhow!("no task selected"))?;
-        let next = match task.status {
-            TaskStatus::Todo => TaskStatus::InProgress,
-            TaskStatus::InProgress => TaskStatus::Complete,
-            TaskStatus::Complete => TaskStatus::WontDo,
-            TaskStatus::WontDo => TaskStatus::Todo,
-        };
-        self.services
-            .task_store
-            .update_status(&project, &task.id, next)?;
-        self.reload_tasks()?;
-        self.status = "Task status updated".to_string();
-        Ok(())
-    }
-
-    pub fn start_session(
-        &mut self,
-        product: CodingAgentProduct,
-        kind: SessionKind,
-    ) -> Result<String> {
-        let project = self
-            .selected_project()
-            .cloned()
-            .ok_or_else(|| anyhow!("no project selected"))?;
-        let task = self
-            .selected_task()
-            .cloned()
-            .ok_or_else(|| anyhow!("no task selected"))?;
-        let session = self
-            .services
-            .session_service
-            .start_session(&project, &task, product, kind)?;
-        self.sessions = self
+    pub fn reload_sessions(&mut self) -> Result<()> {
+        self.state.sessions = self
             .services
             .session_service
             .load_sessions()
             .unwrap_or_default();
-        self.reload_tasks()?;
-        self.route = Route::LiveSession;
-        self.status = format!("Session {}", session.session_id);
-        Ok(session.tmux_session_name)
-    }
-
-    pub fn attach_existing_session(
-        &mut self,
-        product: CodingAgentProduct,
-        kind: SessionKind,
-    ) -> Result<Option<String>> {
-        let task = self
-            .selected_task()
-            .cloned()
-            .ok_or_else(|| anyhow!("no task selected"))?;
-        let session = task
-            .sessions
-            .into_iter()
-            .find(|session| session.product == product && session.session_kind == kind);
-        if let Some(session) = session {
-            self.route = Route::LiveSession;
-            self.status = format!("Session {}", session.session_id);
-            Ok(Some(session.tmux_session_name))
-        } else {
-            self.status = format!("No {} {} session to attach", product.label(), kind.label());
-            Ok(None)
-        }
-    }
-
-    pub fn toggle_selected_project_auto_merge(&mut self) -> Result<()> {
-        let project = self
-            .selected_project()
-            .cloned()
-            .ok_or_else(|| anyhow!("no project selected"))?;
-        let next = !project.config.auto_merge;
-        self.services
-            .project_catalog
-            .update_project_config(&project.id, next)?;
-        self.projects = self.services.project_catalog.load()?;
-        self.status = if next {
-            "Project set to auto-merge".to_string()
-        } else {
-            "Project set to open PRs".to_string()
-        };
         Ok(())
+    }
+
+    pub fn poll_sessions(&mut self) {
+        self.state.sessions = self.services.session_service.poll().unwrap_or_default();
+    }
+
+    pub fn replace_projects(&mut self, projects: Vec<ProjectRecord>) {
+        self.state.projects = projects;
+    }
+
+    pub fn replace_sessions(&mut self, sessions: Vec<SessionRecord>) {
+        self.state.sessions = sessions;
+    }
+
+    pub fn select_last_project(&mut self) {
+        self.state.selected_project = self.state.projects.len().saturating_sub(1);
+    }
+
+    pub fn select_first_project(&mut self) {
+        self.state.selected_project = 0;
+    }
+
+    pub fn reset_add_repo_form(&mut self) {
+        self.state.add_repo_form = AppState::new(&self.services.config).add_repo_form;
     }
 }

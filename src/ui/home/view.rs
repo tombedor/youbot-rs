@@ -14,14 +14,14 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ])
         .split(area);
 
-    let items: Vec<ListItem<'_>> = if app.projects.is_empty() {
-        vec![ListItem::new("No projects. Press 'a' to add one.")]
+    let items: Vec<ListItem<'_>> = if app.projects().is_empty() {
+        vec![ListItem::new("No projects. Press 'n' to add one.")]
     } else {
-        app.projects
+        app.projects()
             .iter()
             .enumerate()
             .map(|(index, project)| {
-                let marker = if index == app.selected_project {
+                let marker = if index == app.selected_project_index() {
                     ">"
                 } else {
                     " "
@@ -38,7 +38,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Block::default()
             .title("Home")
             .borders(Borders::ALL)
-            .title_bottom("Enter project  b attach bg  a add repo  r refresh  q quit"),
+            .title_bottom("Enter project  a attach bg  n add repo  r refresh  q quit"),
     );
     frame.render_widget(list, chunks[0]);
 
@@ -57,7 +57,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let background_rows: Vec<String> = app
         .selected_project()
         .map(|project| {
-            app.sessions
+            app.sessions()
                 .iter()
                 .filter(|record| {
                     record.project_id == project.id
@@ -90,7 +90,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
     frame.render_widget(sessions, chunks[1]);
 
-    let status = Paragraph::new(app.status.as_str())
+    let status = Paragraph::new(app.status())
         .block(Block::default().borders(Borders::TOP))
         .style(Style::default().add_modifier(Modifier::ITALIC));
     frame.render_widget(status, chunks[2]);

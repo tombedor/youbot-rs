@@ -72,7 +72,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
         chunks[2],
     );
     frame.render_widget(
-        Paragraph::new(app.status.as_str()).block(Block::default().borders(Borders::TOP)),
+        Paragraph::new(app.status()).block(Block::default().borders(Borders::TOP)),
         chunks[3],
     );
 }

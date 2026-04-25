@@ -52,6 +52,16 @@ The codebase is split into four layers:
 - [src/application/context.rs](/Users/tombedor/development/youbot-rs/src/application/context.rs:1)
 - Builds the service graph used by the TUI.
 
+### ProjectService
+- [src/application/project_service.rs](/Users/tombedor/development/youbot-rs/src/application/project_service.rs:1)
+- Project-focused application commands.
+- Coordinates project registry writes with state-history snapshots.
+
+### TaskService
+- [src/application/task_service.rs](/Users/tombedor/development/youbot-rs/src/application/task_service.rs:1)
+- Task-focused application commands.
+- Owns task creation and status-cycling workflows above raw task storage.
+
 ### Agent Policy
 - [src/application/agent_policy.rs](/Users/tombedor/development/youbot-rs/src/application/agent_policy.rs:1)
 - Pure logic for:
@@ -76,7 +86,7 @@ The codebase is split into four layers:
 ## Infrastructure
 
 ### Config Storage
-- [src/config.rs](/Users/tombedor/development/youbot-rs/src/config.rs:1)
+- [src/infrastructure/config_store.rs](/Users/tombedor/development/youbot-rs/src/infrastructure/config_store.rs:1)
 - Loads and saves `config.json`.
 
 ### ProjectCatalog
@@ -85,12 +95,24 @@ The codebase is split into four layers:
 - Normalizes/canonicalizes repo paths.
 - Adds existing repos.
 - Creates new repos and optional GitHub remotes.
-- Commits `.youbot` state snapshots.
 
 ### TaskStore
 - [src/infrastructure/task_store.rs](/Users/tombedor/development/youbot-rs/src/infrastructure/task_store.rs:1)
 - Persists `TODO.md` and `CAPTAINS_LOG.md`.
 - Owns task CRUD plus per-task session metadata updates.
+
+### TODO Format
+- [src/infrastructure/todo_format.rs](/Users/tombedor/development/youbot-rs/src/infrastructure/todo_format.rs:1)
+- Renders and parses embedded task metadata inside `TODO.md`.
+
+### Captain's Log Format
+- [src/infrastructure/captains_log_format.rs](/Users/tombedor/development/youbot-rs/src/infrastructure/captains_log_format.rs:1)
+- Renders and parses embedded summary metadata inside `CAPTAINS_LOG.md`.
+
+### StateHistory
+- [src/infrastructure/state_history.rs](/Users/tombedor/development/youbot-rs/src/infrastructure/state_history.rs:1)
+- Best-effort `.youbot` git snapshotting.
+- Kept separate from storage so write durability and history policy are not the same concern.
 
 ### State Files
 - [src/infrastructure/state_files.rs](/Users/tombedor/development/youbot-rs/src/infrastructure/state_files.rs:1)

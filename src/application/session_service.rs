@@ -6,6 +6,7 @@ use crate::domain::{
 use crate::infrastructure::notification::{NotificationSink, SystemNotifier};
 use crate::infrastructure::project_catalog::ProjectCatalog;
 use crate::infrastructure::state_files;
+use crate::infrastructure::state_history::StateHistory;
 use crate::infrastructure::task_store::TaskStore;
 use crate::infrastructure::tmux::{TerminalSessionOps, TmuxTerminal};
 use anyhow::{Context, Result, anyhow};
@@ -23,6 +24,7 @@ pub struct SessionService {
     session_review_service: SessionReviewService,
     notifier: Arc<dyn NotificationSink>,
     task_store: TaskStore,
+    state_history: StateHistory,
     project_catalog: ProjectCatalog,
 }
 
@@ -34,6 +36,7 @@ impl SessionService {
         session_review_service: SessionReviewService,
         notifier: SystemNotifier,
         task_store: TaskStore,
+        state_history: StateHistory,
         project_catalog: ProjectCatalog,
     ) -> Self {
         Self::with_handles(
@@ -43,6 +46,7 @@ impl SessionService {
             session_review_service,
             Arc::new(notifier),
             task_store,
+            state_history,
             project_catalog,
         )
     }
@@ -54,6 +58,7 @@ impl SessionService {
         session_review_service: SessionReviewService,
         notifier: Arc<dyn NotificationSink>,
         task_store: TaskStore,
+        state_history: StateHistory,
         project_catalog: ProjectCatalog,
     ) -> Self {
         Self {
@@ -63,6 +68,7 @@ impl SessionService {
             session_review_service,
             notifier,
             task_store,
+            state_history,
             project_catalog,
         }
     }
@@ -150,8 +156,7 @@ impl SessionService {
         self.task_store
             .upsert_session_without_commit(project, &task.id, session.clone())?;
         self.save_sessions_internal(&sessions)?;
-        self.project_catalog
-            .commit_state_snapshot("Start session")?;
+        self.state_history.commit_snapshot("Start session")?;
         Ok(session)
     }
 
@@ -159,12 +164,9 @@ impl SessionService {
         self.tmux.attach(&session.tmux_session_name)
     }
 
-    pub fn finalize_attached_session(
-        &self,
-        projects: &[ProjectRecord],
-        session_name: &str,
-    ) -> Result<Option<String>> {
+    pub fn finalize_attached_session(&self, session_name: &str) -> Result<Option<String>> {
         let mut sessions = self.load_sessions()?;
+        let projects = self.project_catalog.load()?;
         let Some(record) = sessions
             .iter_mut()
             .find(|record| record.session.tmux_session_name == session_name)
@@ -202,8 +204,8 @@ impl SessionService {
                 record.session.clone(),
             )?;
             self.save_sessions_internal(&sessions)?;
-            self.project_catalog
-                .commit_state_snapshot("Finalize attached session")?;
+            self.state_history
+                .commit_snapshot("Finalize attached session")?;
             return Ok(Some(format!(
                 "Reviewed session {} and set task to {}",
                 session_id,
@@ -220,8 +222,8 @@ impl SessionService {
             record.session.clone(),
         )?;
         self.save_sessions_internal(&sessions)?;
-        self.project_catalog
-            .commit_state_snapshot("Finalize attached session")?;
+        self.state_history
+            .commit_snapshot("Finalize attached session")?;
 
         Ok(Some(format!(
             "Session {} exited before transcript could be captured",
@@ -229,8 +231,9 @@ impl SessionService {
         )))
     }
 
-    pub fn poll(&self, projects: &[ProjectRecord]) -> Result<Vec<SessionRecord>> {
+    pub fn poll(&self) -> Result<Vec<SessionRecord>> {
         let mut sessions = self.load_sessions()?;
+        let projects = self.project_catalog.load()?;
         for record in &mut sessions {
             if !self.tmux.session_exists(&record.session.tmux_session_name) {
                 record.session.state = SessionState::Exited;
@@ -289,8 +292,7 @@ impl SessionService {
             }
         }
         self.save_sessions_internal(&sessions)?;
-        self.project_catalog
-            .commit_state_snapshot("Poll sessions")?;
+        self.state_history.commit_snapshot("Poll sessions")?;
         Ok(sessions)
     }
 
@@ -321,6 +323,7 @@ impl std::fmt::Debug for SessionService {
             .field("monitor_silence_seconds", &self.monitor_silence_seconds)
             .field("session_review_service", &self.session_review_service)
             .field("task_store", &self.task_store)
+            .field("state_history", &self.state_history)
             .field("project_catalog", &self.project_catalog)
             .finish()
     }

@@ -31,20 +31,24 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .title("Project Detail")
                 .title_bottom(
-                    "n new task  s change status  m toggle merge  a attach bg codex  Enter task  Esc home",
+                    "n new task  s set status  l live  b bg  a attach bg  c claude  Enter task  m merge  Esc home",
                 ),
         ),
         chunks[0],
     );
 
-    let items: Vec<ListItem<'_>> = if app.tasks.is_empty() {
+    let items: Vec<ListItem<'_>> = if app.tasks().is_empty() {
         vec![ListItem::new("No tasks. Press 'n' to create one.")]
     } else {
-        app.tasks
+        app.tasks()
             .iter()
             .enumerate()
             .map(|(index, task)| {
-                let marker = if index == app.selected_task { ">" } else { " " };
+                let marker = if index == app.selected_task_index() {
+                    ">"
+                } else {
+                    " "
+                };
                 ListItem::new(format!(
                     "{marker} {} [{}]\n  {}",
                     task.title,
@@ -59,13 +63,15 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
         chunks[1],
     );
 
-    let task_input = if app.creating_task {
+    let task_input = if app.is_creating_task() {
         format!(
             "New task description: {}\nEnter saves, Esc cancels",
-            app.task_draft
+            app.task_draft()
         )
+    } else if app.is_choosing_status() {
+        "Choose task status:\n1 TODO\n2 IN PROGRESS\n3 COMPLETE\n4 WONT DO\nEsc cancels".to_string()
     } else {
-        "Press 'n' to create a task.".to_string()
+        "Press 'n' to create a task, 's' to set status, or l/b/a/c for sessions.".to_string()
     };
     frame.render_widget(
         Paragraph::new(task_input)
@@ -74,7 +80,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 
     frame.render_widget(
-        Paragraph::new(app.status.as_str()).block(Block::default().borders(Borders::TOP)),
+        Paragraph::new(app.status()).block(Block::default().borders(Borders::TOP)),
         chunks[3],
     );
 }

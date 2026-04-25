@@ -52,7 +52,7 @@ impl ProjectCatalog {
         let path = self.registry_path();
         state_files::atomic_write(&path, body)
             .with_context(|| format!("failed to write {}", path.display()))?;
-        self.commit_state_snapshot("Update project registry")
+        Ok(())
     }
 
     pub fn add_existing_repo(
@@ -119,23 +119,6 @@ impl ProjectCatalog {
         project.config.auto_merge = auto_merge;
         self.save(&projects)
     }
-
-    pub fn commit_state_snapshot(&self, message: &str) -> Result<()> {
-        let git_dir = self.state_root.join(".git");
-        if !git_dir.exists() {
-            if let Err(error) = run_git(&self.state_root, ["init"]) {
-                return Ok(log_commit_failure("git init", error));
-            }
-        }
-
-        if let Err(error) = run_git(&self.state_root, ["add", "."]) {
-            return Ok(log_commit_failure("git add", error));
-        }
-        if let Err(error) = run_git_commit(&self.state_root, message) {
-            return Ok(log_commit_failure("git commit", error));
-        }
-        Ok(())
-    }
 }
 
 fn infer_name(path: &Path) -> String {
@@ -148,7 +131,27 @@ fn ensure_git_repo(path: &Path) -> Result<()> {
     if path.join(".git").exists() {
         return Ok(());
     }
-    run_git(path, ["init"])?;
+    let output = Command::new("git")
+        .args(["init"])
+        .current_dir(path)
+        .output()
+        .with_context(|| format!("failed to run git init in {}", path.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let details = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            "git init failed with no output".to_string()
+        };
+        return Err(anyhow!(
+            "git init failed in {}: {}",
+            path.display(),
+            details
+        ));
+    }
     Ok(())
 }
 
@@ -210,70 +213,4 @@ fn canonicalize_repo_path(path: PathBuf) -> Result<PathBuf> {
     let normalized = normalize_repo_path(path)?;
     std::fs::canonicalize(&normalized)
         .with_context(|| format!("failed to canonicalize {}", normalized.display()))
-}
-
-fn run_git<const N: usize>(cwd: &Path, args: [&str; N]) -> Result<()> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .with_context(|| format!("failed to run git {:?} in {}", args, cwd.display()))?;
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let details = if !stderr.is_empty() {
-        stderr
-    } else if !stdout.is_empty() {
-        stdout
-    } else {
-        "git command failed with no output".to_string()
-    };
-    Err(anyhow!(
-        "git {:?} failed in {}: {}",
-        args,
-        cwd.display(),
-        details
-    ))
-}
-
-fn run_git_commit(cwd: &Path, message: &str) -> Result<()> {
-    let output = Command::new("git")
-        .args([
-            "-c",
-            "user.name=youbot",
-            "-c",
-            "user.email=youbot@local",
-            "commit",
-            "-m",
-            message,
-            "--allow-empty",
-        ])
-        .current_dir(cwd)
-        .output()
-        .with_context(|| format!("failed to run git commit in {}", cwd.display()))?;
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let details = if !stderr.is_empty() {
-        stderr
-    } else if !stdout.is_empty() {
-        stdout
-    } else {
-        "git commit failed with no output".to_string()
-    };
-    Err(anyhow!(
-        "git commit failed in {}: {}",
-        cwd.display(),
-        details
-    ))
-}
-
-fn log_commit_failure(operation: &str, error: anyhow::Error) {
-    eprintln!("warning: state history {operation} failed: {error:#}");
 }

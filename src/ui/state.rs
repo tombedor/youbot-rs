@@ -1,4 +1,4 @@
-use crate::domain::{AppConfig, ProjectRecord, SessionRecord, TaskRecord};
+use crate::domain::{AppConfig, ProjectRecord, SessionRecord, TaskRecord, TaskStatus};
 
 #[derive(Debug, Clone)]
 pub struct AddRepoForm {
@@ -48,6 +48,28 @@ pub enum Route {
     LiveSession,
 }
 
+#[derive(Debug, Clone, Default)]
+pub enum ProjectDetailState {
+    #[default]
+    Browsing,
+    CreatingTask {
+        draft: String,
+    },
+    ChoosingStatus,
+}
+
+impl ProjectDetailState {
+    pub fn status_options() -> &'static [TaskStatus] {
+        const OPTIONS: [TaskStatus; 4] = [
+            TaskStatus::Todo,
+            TaskStatus::InProgress,
+            TaskStatus::Complete,
+            TaskStatus::WontDo,
+        ];
+        &OPTIONS
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub route: Route,
@@ -56,8 +78,7 @@ pub struct AppState {
     pub selected_project: usize,
     pub selected_task: usize,
     pub add_repo_form: AddRepoForm,
-    pub creating_task: bool,
-    pub task_draft: String,
+    pub project_detail_state: ProjectDetailState,
     pub status: String,
     pub should_quit: bool,
     pub sessions: Vec<SessionRecord>,
@@ -77,8 +98,7 @@ impl AppState {
                 programming_language: "rust".to_string(),
                 ..AddRepoForm::default()
             },
-            creating_task: false,
-            task_draft: String::new(),
+            project_detail_state: ProjectDetailState::Browsing,
             status: "Ready".to_string(),
             should_quit: false,
             sessions: Vec::new(),

@@ -2,30 +2,24 @@ use crate::domain::{
     AgentSessionRef, CaptainLogEntry, CodingAgentProduct, ProjectRecord, SessionSummary,
     TaskRecord, TaskStatus,
 };
-use crate::infrastructure::project_catalog::ProjectCatalog;
+use crate::infrastructure::captains_log_format::{parse_captains_log, render_captains_log};
 use crate::infrastructure::state_files;
+use crate::infrastructure::todo_format::{parse_todo_markdown, render_todo_markdown};
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-const TODO_HEADER: &str = "# TODO\n\n";
-const TODO_MARKER_START: &str = "<!-- youbot:tasks ";
-const TODO_MARKER_END: &str = " -->";
-
 #[derive(Debug, Clone)]
 pub struct TaskStore {
     state_root: PathBuf,
-    project_catalog: ProjectCatalog,
 }
 
 impl TaskStore {
-    pub fn new(state_root: impl Into<PathBuf>, project_catalog: ProjectCatalog) -> Self {
+    pub fn new(state_root: impl Into<PathBuf>) -> Self {
         Self {
             state_root: state_root.into(),
-            project_catalog,
         }
     }
 
@@ -66,8 +60,6 @@ impl TaskStore {
         };
         tasks.push(task.clone());
         self.write_tasks_internal(project, &tasks)?;
-        self.project_catalog
-            .commit_state_snapshot("Update task state")?;
         Ok(task)
     }
 
@@ -84,8 +76,7 @@ impl TaskStore {
             .ok_or_else(|| anyhow!("unknown task id {task_id}"))?;
         task.status = status;
         self.write_tasks_internal(project, &tasks)?;
-        self.project_catalog
-            .commit_state_snapshot("Update task state")
+        Ok(())
     }
 
     pub fn upsert_session(
@@ -97,8 +88,7 @@ impl TaskStore {
         let mut tasks = self.load_tasks(project)?;
         self.upsert_session_in_tasks(&mut tasks, task_id, session)?;
         self.write_tasks_internal(project, &tasks)?;
-        self.project_catalog
-            .commit_state_snapshot("Update task state")
+        Ok(())
     }
 
     pub fn append_summary(
@@ -140,8 +130,7 @@ impl TaskStore {
         let mut entries = self.load_captains_log(project)?;
         entries.push(entry);
         self.write_captains_log_internal(project, &entries)?;
-        self.project_catalog
-            .commit_state_snapshot("Update task session summary")
+        Ok(())
     }
 
     pub fn load_captains_log(&self, project: &ProjectRecord) -> Result<Vec<CaptainLogEntry>> {
@@ -166,9 +155,7 @@ impl TaskStore {
     }
 
     pub fn write_tasks(&self, project: &ProjectRecord, tasks: &[TaskRecord]) -> Result<()> {
-        self.write_tasks_internal(project, tasks)?;
-        self.project_catalog
-            .commit_state_snapshot("Update task state")
+        self.write_tasks_internal(project, tasks)
     }
 
     pub fn upsert_session_without_commit(
@@ -235,105 +222,4 @@ impl TaskStore {
     fn captains_log_path(&self, project: &ProjectRecord) -> PathBuf {
         self.project_state_dir(project).join("CAPTAINS_LOG.md")
     }
-}
-
-pub fn render_todo_markdown(tasks: &[TaskRecord]) -> String {
-    let json = serde_json::to_string_pretty(tasks).expect("task serialization should not fail");
-    let mut body = String::from(TODO_HEADER);
-    body.push_str(TODO_MARKER_START);
-    body.push_str(&json);
-    body.push_str(TODO_MARKER_END);
-    body.push_str("\n\n");
-
-    if tasks.is_empty() {
-        body.push_str("_No tasks yet._\n");
-        return body;
-    }
-
-    for task in tasks {
-        body.push_str(&format!("## {} [{}]\n", task.title, task.status.label()));
-        body.push_str(&format!("- id: `{}`\n", task.id));
-        body.push_str(&format!("- description: {}\n", task.description));
-        if task.sessions.is_empty() {
-            body.push_str("- sessions: none\n\n");
-            continue;
-        }
-        for session in &task.sessions {
-            body.push_str(&format!(
-                "- {} {} session: `{}` ({})\n",
-                session.product.label(),
-                session.session_kind.label(),
-                session.session_id,
-                session.state.label()
-            ));
-            if let Some(branch) = &session.branch_name {
-                body.push_str(&format!("  branch: `{branch}`\n"));
-            }
-            if let Some(summary) = &session.last_summary {
-                body.push_str(&format!("  last summary: {}\n", summary.summary));
-            }
-        }
-        body.push('\n');
-    }
-
-    body
-}
-
-pub fn parse_todo_markdown(body: &str) -> Result<Vec<TaskRecord>> {
-    let Some(start) = body.find(TODO_MARKER_START) else {
-        return Ok(Vec::new());
-    };
-    let json_start = start + TODO_MARKER_START.len();
-    let remaining = &body[json_start..];
-    let Some(end) = remaining.find(TODO_MARKER_END) else {
-        return Err(anyhow!("missing TODO metadata terminator"));
-    };
-    let json = &remaining[..end];
-    let tasks = serde_json::from_str(json).context("failed to parse TODO metadata")?;
-    Ok(tasks)
-}
-
-pub fn render_captains_log(entries: &[CaptainLogEntry]) -> String {
-    #[derive(Serialize)]
-    struct Wrapper<'a> {
-        entries: &'a [CaptainLogEntry],
-    }
-
-    let mut body = String::from("# CAPTAINS LOG\n\n");
-    body.push_str("<!-- youbot:captains_log ");
-    body.push_str(
-        &serde_json::to_string_pretty(&Wrapper { entries })
-            .expect("captains log serialization should not fail"),
-    );
-    body.push_str(" -->\n\n");
-    for entry in entries.iter().rev() {
-        body.push_str(&format!(
-            "## {} | {} | {}\n{}\n\n",
-            entry.timestamp.to_rfc3339(),
-            entry.task_title,
-            entry.product.label(),
-            entry.summary
-        ));
-    }
-    body
-}
-
-pub fn parse_captains_log(body: &str) -> Result<Vec<CaptainLogEntry>> {
-    #[derive(Deserialize)]
-    struct Wrapper {
-        entries: Vec<CaptainLogEntry>,
-    }
-
-    let marker = "<!-- youbot:captains_log ";
-    let Some(start) = body.find(marker) else {
-        return Ok(Vec::new());
-    };
-    let json_start = start + marker.len();
-    let remaining = &body[json_start..];
-    let Some(end) = remaining.find(" -->") else {
-        return Err(anyhow!("missing captains log metadata terminator"));
-    };
-    let wrapper: Wrapper =
-        serde_json::from_str(&remaining[..end]).context("failed to parse captains log metadata")?;
-    Ok(wrapper.entries)
 }

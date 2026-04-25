@@ -6,11 +6,14 @@ use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use youbot_rs::app::App;
 use youbot_rs::application::context::AppServices;
+use youbot_rs::application::project_service::ProjectService;
 use youbot_rs::application::session_review_service::SessionReviewService;
 use youbot_rs::application::session_service::SessionService;
+use youbot_rs::application::task_service::TaskService;
 use youbot_rs::domain::{AppConfig, CodingAgentProduct, ProjectConfig, ProjectRecord, SessionKind};
 use youbot_rs::infrastructure::notification::NotificationSink;
 use youbot_rs::infrastructure::project_catalog::ProjectCatalog;
+use youbot_rs::infrastructure::state_history::StateHistory;
 use youbot_rs::infrastructure::task_store::TaskStore;
 use youbot_rs::infrastructure::tmux::TerminalSessionOps;
 use youbot_rs::ui::state::AppState;
@@ -21,20 +24,26 @@ fn app_toggle_project_auto_merge_persists_to_registry() {
     let (mut app, _tmux_state) = test_app(temp.path());
     let repo_path = temp.path().join("repo");
     std::fs::create_dir_all(&repo_path).unwrap();
-    let project = app
+    let added_project = app
         .services
-        .project_catalog
+        .project_service
         .add_existing_repo(&repo_path, false)
         .unwrap();
-    app.projects = app.services.project_catalog.load().unwrap();
-    app.selected_project = 0;
+    app.state.projects = app.services.project_service.load_projects().unwrap();
+    app.state.selected_project = 0;
 
-    app.toggle_selected_project_auto_merge().unwrap();
+    let project = app.selected_project().cloned().unwrap();
+    app.services
+        .project_service
+        .set_auto_merge(&project.id, true)
+        .unwrap();
+    app.state.projects = app.services.project_service.load_projects().unwrap();
+    app.set_status("Project set to auto-merge");
 
-    let reloaded = app.services.project_catalog.load().unwrap();
-    assert_eq!(project.id, reloaded[0].id);
+    let reloaded = app.services.project_service.load_projects().unwrap();
+    assert_eq!(added_project.id, reloaded[0].id);
     assert!(reloaded[0].config.auto_merge);
-    assert_eq!(app.status, "Project set to auto-merge");
+    assert_eq!(app.status(), "Project set to auto-merge");
 }
 
 #[test]
@@ -44,22 +53,37 @@ fn create_task_start_session_and_reload_state_round_trips() {
     let repo_path = temp.path().join("repo");
     std::fs::create_dir_all(&repo_path).unwrap();
     app.services
-        .project_catalog
+        .project_service
         .add_existing_repo(&repo_path, false)
         .unwrap();
-    app.projects = app.services.project_catalog.load().unwrap();
-    app.selected_project = 0;
+    app.state.projects = app.services.project_service.load_projects().unwrap();
+    app.state.selected_project = 0;
 
-    app.create_task("Investigate the background worker drift")
+    let project = app.selected_project().cloned().unwrap();
+    let task = app
+        .services
+        .task_service
+        .create_task(&project, "Investigate the background worker drift")
         .unwrap();
-    let session_name = app
-        .start_session(CodingAgentProduct::Codex, SessionKind::Background)
+    app.reload_tasks().unwrap();
+    let session = app
+        .services
+        .session_service
+        .start_session(
+            &project,
+            &task,
+            CodingAgentProduct::Codex,
+            SessionKind::Background,
+        )
         .unwrap();
+    app.state.sessions = app.services.session_service.load_sessions().unwrap();
+    app.reload_tasks().unwrap();
+    let session_name = session.tmux_session_name.clone();
 
     let tasks = app
         .services
         .task_store
-        .load_tasks(&app.projects[0])
+        .load_tasks(&app.projects()[0])
         .unwrap();
     let sessions = app.services.session_service.load_sessions().unwrap();
 
@@ -73,8 +97,9 @@ fn create_task_start_session_and_reload_state_round_trips() {
     assert_eq!(sessions.len(), 1);
 
     let registry = ProjectCatalog::new(app.config().state_root.clone());
-    let repo = TaskStore::new(app.config().state_root.clone(), registry.clone());
+    let repo = TaskStore::new(app.config().state_root.clone());
     let supervisor = SessionReviewService::new(repo.clone());
+    let state_history = StateHistory::new(app.config().state_root.clone());
     let manager = SessionService::with_handles(
         app.config().state_root.clone(),
         120,
@@ -82,6 +107,7 @@ fn create_task_start_session_and_reload_state_round_trips() {
         supervisor,
         Arc::new(FakeNotifier::default()),
         repo,
+        state_history,
         registry,
     );
     let reloaded_sessions = manager.load_sessions().unwrap();
@@ -98,8 +124,11 @@ fn test_app(root: &Path) -> (App, Arc<Mutex<FakeTmuxState>>) {
         tmux_socket_name: "youbot-test".to_string(),
         monitor_silence_seconds: 120,
     };
+    let state_history = StateHistory::new(state_root.clone());
     let project_catalog = ProjectCatalog::new(state_root.clone());
-    let task_store = TaskStore::new(state_root.clone(), project_catalog.clone());
+    let task_store = TaskStore::new(state_root.clone());
+    let project_service = ProjectService::new(project_catalog.clone(), state_history.clone());
+    let task_service = TaskService::new(task_store.clone(), state_history.clone());
     let session_review_service = SessionReviewService::new(task_store.clone());
     let tmux_state = Arc::new(Mutex::new(FakeTmuxState::default()));
     let session_service = SessionService::with_handles(
@@ -111,13 +140,17 @@ fn test_app(root: &Path) -> (App, Arc<Mutex<FakeTmuxState>>) {
         session_review_service.clone(),
         Arc::new(FakeNotifier::default()),
         task_store.clone(),
+        state_history.clone(),
         project_catalog.clone(),
     );
 
     let services = AppServices {
         config: config.clone(),
+        state_history,
         project_catalog,
         task_store,
+        project_service,
+        task_service,
         session_review_service,
         session_service,
     };
