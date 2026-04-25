@@ -42,6 +42,8 @@ depends on: TaskRepository for CRUD ops on tasks
 - provides input to coding agent for background tasks
 - evaluates whether task is done for background agents
 - on exit, reviews transcript, writes summary to captains log, updates task status
+- classifies call to summarize what a tasks title should be.
+
 
 
 
